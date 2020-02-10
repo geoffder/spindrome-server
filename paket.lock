@@ -1,0 +1,15 @@
+STORAGE: NONE
+RESTRICTION: || (== netcoreapp3.1) (== netstandard2.0) (== netstandard2.1)
+NUGET
+  remote: https://api.nuget.org/v3/index.json
+    Aether (8.3.1)
+      FSharp.Core (>= 4.3.4)
+    Chiron (6.3.1)
+      Aether (>= 8.2)
+      FParsec (>= 1.0.3)
+      FSharp.Core (>= 4.3.4)
+    FParsec (1.1.1)
+      FSharp.Core (>= 4.3.4)
+    FSharp.Core (4.7)
+    Suave (2.5.6)
+      FSharp.Core (>= 4.3.4)
