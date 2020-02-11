@@ -1,21 +1,10 @@
 module GameServer.MatchMaker
 
-open Chiron
+open Newtonsoft.Json
 open Suave
 open Suave.Filters
 open Suave.Operators
 open Suave.Successful
-
-let newLobby name mode cap host =
-    { Name = name
-      ID = System.Guid.NewGuid()
-      Mode = mode
-      Capacity = cap
-      Host = host
-      Players = [host] }
-
-let newPlayer name =
-    { Name = name; ID = System.Guid.NewGuid() }
 
 let tryJoin lobby player =
     if lobby.Players.Length < lobby.Capacity
@@ -28,14 +17,13 @@ let playerAgent = MailboxProcessor.Start(fun inbox ->
 
     let rec loop (players: Map<System.Guid, Player>) = async {
         match! inbox.Receive() with
-        | Login (name, id, channel) ->
-            do channel.Reply (sprintf "%s logged in" (id.ToString()))
-            let p = { Name = name; ID = id }
-            return! loop (Map.add id p players)
+        | Login (player, channel) ->
+            do channel.Reply (sprintf "%s logged in" (player.ID.ToString()))
+            return! loop (Map.add player.ID player players)
         | Logout id ->
             return! loop (Map.remove id players)
         | GetPlayer (id, channel) ->
-            do channel.Reply players.[id]
+            do channel.Reply (Map.tryFind id players)
             return! loop players
     }
 
@@ -46,16 +34,14 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
 
     let rec loop (lobbies: Map<string, Lobby>) = async {
         match! inbox.Receive() with
-        | Create (name, mode, cap, player, channel) ->
-            match Map.containsKey name lobbies with
+        | Create (lobby, channel) ->
+            match Map.containsKey lobby.Name lobbies with
             | true ->
                 do channel.Reply "Lobby with that name already exists."
                 return! loop lobbies
             | false ->
                 do channel.Reply "Lobby created!"
-                return!
-                    lobbies |> Map.add name (newLobby name mode cap player)
-                    |> loop
+                return! lobbies |> Map.add lobby.Name lobby |> loop
         | Join (lobName, player, channel) ->
             match tryJoin lobbies.[lobName] player with
             | Some lobby ->
@@ -73,33 +59,39 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
 )
 
 let getPlayer id =
-  let msg chan = GetPlayer (id, chan)
-  playerAgent.PostAndReply msg
+    let msg chan = GetPlayer (id, chan)
+    playerAgent.PostAndReply msg
 
-let createLobby (name, mode, score, cap, (idStr: string)) =
-    let game =
-        match mode with
-        | "last_man" -> LastMan score
-        | "boost_ball" -> BoostBall score
-        | _ -> LastMan score
-    let id = System.Guid.Parse idStr
-    let msg chan = Create (name, game, cap, (getPlayer id), chan)
-    msg |> lobbyAgent.PostAndReply |> OK
+let createLobby (name, mode, time, score, cap, (idStr: string)) =
+    let buildLobby host =
+        { Name = name
+          ID = System.Guid.NewGuid()
+          Mode = GameMode.FromString mode
+          Limits = { Time = time; Score = score }
+          Capacity = cap
+          Host = host
+          Players = [host] }
+    let msg lobby chan = Create (lobby, chan)
+    let sendNewLobby = buildLobby >> msg >> lobbyAgent.PostAndReply
+    match getPlayer (System.Guid.Parse idStr) with
+    | Some p -> p |> sendNewLobby |> OK
+    | None -> OK "No such player ID is logged in."
 
 let joinLobby (name, (idStr: string)) =
-    let msg chan = Join (name, (getPlayer (System.Guid.Parse idStr)), chan)
-    msg |> lobbyAgent.PostAndReply |> OK
+    let msg player chan = Join (name, player, chan)
+    match getPlayer (System.Guid.Parse idStr) with
+    | Some p -> p |> msg |> lobbyAgent.PostAndReply |> OK
+    | None -> OK "No such player ID is logged in."
 
 let getLobbies _filters =
     // TODO: add filters on to path (only send relevant lobbies)
     RequestList
     |> lobbyAgent.PostAndReply
-    |> Json.serialize
-    |> Json.format
+    |> JsonConvert.SerializeObject
     |> OK
 
 let loginPlayer name =
-    let msg chan = Login (name, System.Guid.NewGuid(), chan)
+    let msg chan = Login ({ Name = name; ID = System.Guid.NewGuid() }, chan)
     msg |> playerAgent.PostAndReply |> OK
 
 let server =
@@ -108,5 +100,5 @@ let server =
               [ pathScan "/lobby_list/%s" getLobbies ]
           POST >=> choose
               [ pathScan "/login/%s" loginPlayer
-                pathScan "/create_lobby/%s/%s/%i/%i/%s" createLobby
+                pathScan "/create_lobby/%s/%s/%i/%i/%i/%s" createLobby
                 pathScan "/join_lobby/%s/%s" joinLobby ] ]
