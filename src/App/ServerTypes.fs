@@ -11,11 +11,6 @@ type GameMode =
         | "last_man" -> LastMan
         | "boost_ball" -> BoostBall
         | _ -> LastMan
-    member m.ToString =
-        match m with
-        | LastMan -> "last_man"
-        | BoostBall -> "boost_ball"
-
 
 type Limits = { Time: int; Score: int }
 
@@ -38,4 +33,5 @@ type PlayerMessage =
 type LobbyMessage =
     | Create of Lobby * AsyncReplyChannel<string>
     | Join of Name * Player * AsyncReplyChannel<string>
+    | Leave of Name * Player
     | RequestList of AsyncReplyChannel<Map<Name, Lobby>>

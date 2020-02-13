@@ -11,6 +11,13 @@ let tryJoin lobby player =
     then Some { lobby with Players = player :: lobby.Players }
     else None
 
+let dropPlayer player lobby =
+    if player <> lobby.Host then
+        match List.except [player] lobby.Players with
+        | [] -> None
+        | ps -> Some { lobby with Players = ps }
+    else None
+
 let test () = printfn "test"
 
 let playerAgent = MailboxProcessor.Start(fun inbox ->
@@ -42,14 +49,21 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
             | false ->
                 do channel.Reply "Lobby created!"
                 return! lobbies |> Map.add lobby.Name lobby |> loop
-        | Join (lobName, player, channel) ->
-            match tryJoin lobbies.[lobName] player with
+        | Join (name, player, channel) ->
+            match tryJoin lobbies.[name] player with
             | Some lobby ->
                 do channel.Reply "Succesfully joined lobby!"
-                return! loop (Map.add lobName lobby lobbies)
+                return! loop (Map.add name lobby lobbies)
             | None ->
                 do channel.Reply "All full up!"
                 return! loop lobbies
+        | Leave (name, player) ->
+            return!
+                Map.tryFind name lobbies
+                |> Option.bind (fun l -> dropPlayer player l)
+                |> function
+                       | Some l -> loop (Map.add name l lobbies)
+                       | None -> loop (Map.remove name lobbies)
         | RequestList (channel) ->
             do channel.Reply lobbies
             return! loop lobbies
@@ -62,7 +76,7 @@ let getPlayer id =
     let msg chan = GetPlayer (id, chan)
     playerAgent.PostAndReply msg
 
-let createLobby (name, mode, time, score, cap, (idStr: string)) =
+let createLobby (name, mode, time, score, cap, id: string) =
     let buildLobby host =
         { Name = name
           ID = System.Guid.NewGuid()
@@ -73,15 +87,23 @@ let createLobby (name, mode, time, score, cap, (idStr: string)) =
           Players = [host] }
     let msg lobby chan = Create (lobby, chan)
     let sendNewLobby = buildLobby >> msg >> lobbyAgent.PostAndReply
-    match getPlayer (System.Guid.Parse idStr) with
+    match getPlayer (System.Guid.Parse id) with
     | Some p -> p |> sendNewLobby |> OK
     | None -> OK "No such player ID is logged in."
 
-let joinLobby (name, (idStr: string)) =
+let joinLobby (name, id: string) =
     let msg player chan = Join (name, player, chan)
-    match getPlayer (System.Guid.Parse idStr) with
+    match getPlayer (System.Guid.Parse id) with
     | Some p -> p |> msg |> lobbyAgent.PostAndReply |> OK
     | None -> OK "No such player ID is logged in."
+
+// TODO: ? Add a player to lobby lookup to enable dropping from lobby when
+// connection is lost ?
+let leaveLobby (id: string, lobbyName) =
+    match getPlayer (System.Guid.Parse id) with
+    | Some p -> Leave (lobbyName, p) |> lobbyAgent.Post
+    | None -> ()
+    OK "Lobby exited."
 
 let getLobbies _filters =
     // TODO: add filters on to path (only send relevant lobbies)
@@ -101,4 +123,5 @@ let server =
           POST >=> choose
               [ pathScan "/login/%s" loginPlayer
                 pathScan "/create_lobby/%s/%s/%i/%i/%i/%s" createLobby
-                pathScan "/join_lobby/%s/%s" joinLobby ] ]
+                pathScan "/join_lobby/%s/%s" joinLobby
+                pathScan "/leave_lobby/%s/%s" leaveLobby ] ]
