@@ -18,6 +18,12 @@ let dropPlayer player lobby =
         | ps -> Some { lobby with Players = ps }
     else None
 
+let applyFiltersToMap filters key value =
+    let rec apply = function
+        | f :: t -> if f key value then apply t else false
+        | [] -> true
+    apply filters
+
 let test () = printfn "test"
 
 let playerAgent = MailboxProcessor.Start(fun inbox ->
@@ -27,8 +33,7 @@ let playerAgent = MailboxProcessor.Start(fun inbox ->
         | Login (player, channel) ->
             do channel.Reply (sprintf "%s logged in" (player.ID.ToString()))
             return! loop (Map.add player.ID player players)
-        | Logout id ->
-            return! loop (Map.remove id players)
+        | Logout id -> return! loop (Map.remove id players)
         | GetPlayer (id, channel) ->
             do channel.Reply (Map.tryFind id players)
             return! loop players
@@ -62,9 +67,9 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
                 Map.tryFind name lobbies
                 |> Option.bind (fun l -> dropPlayer player l)
                 |> function
-                       | Some l -> loop (Map.add name l lobbies)
-                       | None -> loop (Map.remove name lobbies)
-        | RequestList (channel) ->
+                   | Some l -> loop (Map.add name l lobbies)
+                   | None -> loop (Map.remove name lobbies)
+        | RequestList channel ->
             do channel.Reply lobbies
             return! loop lobbies
     }
@@ -105,10 +110,20 @@ let leaveLobby (id: string, lobbyName) =
     | None -> ()
     OK "Lobby exited."
 
-let getLobbies _filters =
-    // TODO: add filters on to path (only send relevant lobbies)
+let getLobbyFilter str : (Name -> Lobby -> bool) list =
+    match str with
+    | "last_man" -> [ fun _ l -> l.Mode = LastMan ]
+    | "boost_ball" -> [ fun _ l -> l.Mode = BoostBall ]
+    | _ -> []
+
+let getLobbies (filterStr: string) =
+    let filters =
+        filterStr.Split "/"
+        |> List.ofArray
+        |> List.collect getLobbyFilter
     RequestList
     |> lobbyAgent.PostAndReply
+    |> Map.filter (applyFiltersToMap filters)
     |> JsonConvert.SerializeObject
     |> OK
 
