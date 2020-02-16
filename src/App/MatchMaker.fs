@@ -1,10 +1,15 @@
 module GameServer.MatchMaker
 
 open Newtonsoft.Json
+
 open Suave
 open Suave.Filters
 open Suave.Operators
 open Suave.Successful
+
+open Suave.Sockets
+open Suave.Sockets.Control
+open Suave.WebSocket
 
 let tryJoin lobby player =
     if lobby.Players.Length < lobby.Capacity
@@ -23,8 +28,6 @@ let applyFiltersToMap filters key value =
         | f :: t -> if f key value then apply t else false
         | [] -> true
     apply filters
-
-let test () = printfn "test"
 
 let playerAgent = MailboxProcessor.Start(fun inbox ->
 
@@ -110,6 +113,9 @@ let leaveLobby (id: string, lobbyName) =
     | None -> ()
     OK "Lobby exited."
 
+// TODO: Replace with has space? (local duo for example)
+let lobbyNotFull _name l = l.Players.Length < l.Capacity
+
 let getLobbyFilter str : (Name -> Lobby -> bool) list =
     match str with
     | "last_man" -> [ fun _ l -> l.Mode = LastMan ]
@@ -120,16 +126,98 @@ let getLobbies (filterStr: string) =
     let filters =
         filterStr.Split "/"
         |> List.ofArray
+        |> List.distinct
         |> List.collect getLobbyFilter
     RequestList
     |> lobbyAgent.PostAndReply
-    |> Map.filter (applyFiltersToMap filters)
+    |> Map.filter (applyFiltersToMap (lobbyNotFull :: filters))
     |> JsonConvert.SerializeObject
     |> OK
 
-let loginPlayer name =
-    let msg chan = Login ({ Name = name; ID = System.Guid.NewGuid() }, chan)
-    msg |> playerAgent.PostAndReply |> OK
+// NOTE: Example Suave websocket code.
+let ws (webSocket : WebSocket) (_context: HttpContext) =
+    socket {
+        let mutable loop = true
+        while loop do
+            match! webSocket.read() with
+            | (Text, data, true) ->
+                let str = UTF8.toString data
+                let response = sprintf "response to %s" str
+                let byteResponse =
+                    response
+                    |> System.Text.Encoding.ASCII.GetBytes
+                    |> ByteSegment
+                do! webSocket.send Text byteResponse true
+            | (Close, _, _) ->
+                let emptyResponse = [||] |> ByteSegment
+                do! webSocket.send Close emptyResponse true
+                loop <- false
+            | _ -> ()
+    }
+
+// Seems like it doesn't complain with tailrec implementation rather than
+// do while?
+let wsrec (webSocket : WebSocket) (_context: HttpContext) =
+    let rec loop () = socket {
+        match! webSocket.read() with
+        | (Text, data, true) ->
+            let str = UTF8.toString data
+            let response = sprintf "response to %s" str
+            let byteResponse =
+                response
+                |> System.Text.Encoding.ASCII.GetBytes
+                |> ByteSegment
+            do! webSocket.send Text byteResponse true
+            loop () |> ignore
+        | (Close, _, _) ->
+            let emptyResponse = [||] |> ByteSegment
+            do! webSocket.send Close emptyResponse true
+            ()
+        | _ -> loop () |> ignore
+    }
+    loop ()
+
+let webSock onConnect onDisconnect (ws : WebSocket) (ctx: HttpContext) =
+    let rec loop () = socket {
+        ()
+    }
+
+    socket {
+        // Doesn't need to be injected function, could just be sending the
+        // websocket and context to something that will hold it?
+        onConnect ws ctx
+        try do! loop ()
+        // function injected that will make sure housekeeping is done following
+        // loss of connection.
+        finally onDisconnect ctx
+    }
+
+// TODO: Screwing around.
+let wsAgent (ws: WebSocket) (ctx: HttpContext) =
+    MailboxProcessor.Start(fun inbox ->
+        let rec loop () = async {
+            ()
+        }
+        loop ()
+    )
+
+let loginPlayer name = context (fun ctx ->
+        let player = { Name = name; ID = System.Guid.NewGuid(); Socket = ws }
+        let msg chan = Login (player , chan)
+        // TODO: Do I want to send this back to the client as well? Might not
+        // need to since HTTP requests can cover everything.
+        // What do I need to store in my player types and how do I use it?
+        // The ws function is running the socket, but I don't have a way
+        // to send that process things do I? I think I need to have an Agent
+        // hold on do it so it can pass in messages to be broadcasted?
+        let maybeSocket = handShake ws ctx
+
+        msg |> playerAgent.PostAndReply |> OK
+    )
+
+// let loginPlayer name =
+//     let msg chan = Login ({ Name = name; ID = System.Guid.NewGuid() } , chan)
+//     msg |> playerAgent.PostAndReply |> OK
 
 let server =
     choose

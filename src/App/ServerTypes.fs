@@ -1,5 +1,7 @@
 namespace GameServer
 
+open Suave.WebSocket
+
 type Name = string
 type Cap = int
 
@@ -14,7 +16,7 @@ type GameMode =
 
 type Limits = { Time: int; Score: int }
 
-type Player = { Name: string; ID: System.Guid }
+type Player = { Name: string; ID: System.Guid; Socket: WebSocket }
 
 type Lobby =
     { Name: string
