@@ -134,52 +134,26 @@ let getLobbies (filterStr: string) =
     |> JsonConvert.SerializeObject
     |> OK
 
-// NOTE: Example Suave websocket code.
-let ws (webSocket : WebSocket) (_context: HttpContext) =
-    socket {
-        let mutable loop = true
-        while loop do
-            match! webSocket.read() with
-            | (Text, data, true) ->
-                let str = UTF8.toString data
-                let response = sprintf "response to %s" str
-                let byteResponse =
-                    response
-                    |> System.Text.Encoding.ASCII.GetBytes
-                    |> ByteSegment
-                do! webSocket.send Text byteResponse true
-            | (Close, _, _) ->
-                let emptyResponse = [||] |> ByteSegment
-                do! webSocket.send Close emptyResponse true
-                loop <- false
-            | _ -> ()
-    }
-
 let webSock onConnect onDisconnect (ws : WebSocket) (ctx: HttpContext) =
     let rec loop () = socket {
         match! ws.read() with
         | (Text, data, true) ->
-            let byteResponse =
+            let response =
                 UTF8.toString data
                 |> sprintf "response to %s"
                 |> System.Text.Encoding.ASCII.GetBytes
                 |> ByteSegment
-            do! ws.send Text byteResponse true
+            do! ws.send Text response true
             return! loop ()
         | (Close, _, _) ->
-            let emptyResponse = [||] |> ByteSegment
-            do! ws.send Close emptyResponse true
+            do! ws.send Close (ByteSegment [||]) true
             return ()
         | _ -> return! loop ()
     }
 
     socket {
-        // Doesn't need to be injected function, could just be sending the
-        // websocket and context to something that will hold it?
         onConnect ws ctx
         try do! loop ()
-        // function injected that will make sure housekeeping is done following
-        // loss of connection.
         finally onDisconnect ctx
     }
 
@@ -199,7 +173,7 @@ let wsAgent (ws: WebSocket) (ctx: HttpContext) =
 // NOTE: This pattern will let me use path scan and do other things with the
 // context while returning what the client needs for the socket.
 let wsTest _str = fun ctx ->
-    handShake ws ctx
+    handShake (webSock onSock offSock) ctx
 
 let loginPlayer name =
     let msg chan = Login ({ Name = name; ID = System.Guid.NewGuid() } , chan)
