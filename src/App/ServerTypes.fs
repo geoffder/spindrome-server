@@ -16,7 +16,8 @@ type GameMode =
 
 type Limits = { Time: int; Score: int }
 
-type Player = { Name: string; ID: System.Guid; Socket: WebSocket }
+// type Player = { Name: string; ID: System.Guid; Socket: WebSocket }
+type Player = { Name: string; ID: System.Guid }
 
 type Lobby =
     { Name: string

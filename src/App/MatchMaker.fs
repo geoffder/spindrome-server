@@ -155,31 +155,22 @@ let ws (webSocket : WebSocket) (_context: HttpContext) =
             | _ -> ()
     }
 
-// Seems like it doesn't complain with tailrec implementation rather than
-// do while?
-let wsrec (webSocket : WebSocket) (_context: HttpContext) =
-    let rec loop () = socket {
-        match! webSocket.read() with
-        | (Text, data, true) ->
-            let str = UTF8.toString data
-            let response = sprintf "response to %s" str
-            let byteResponse =
-                response
-                |> System.Text.Encoding.ASCII.GetBytes
-                |> ByteSegment
-            do! webSocket.send Text byteResponse true
-            loop () |> ignore
-        | (Close, _, _) ->
-            let emptyResponse = [||] |> ByteSegment
-            do! webSocket.send Close emptyResponse true
-            ()
-        | _ -> loop () |> ignore
-    }
-    loop ()
-
 let webSock onConnect onDisconnect (ws : WebSocket) (ctx: HttpContext) =
     let rec loop () = socket {
-        ()
+        match! ws.read() with
+        | (Text, data, true) ->
+            let byteResponse =
+                UTF8.toString data
+                |> sprintf "response to %s"
+                |> System.Text.Encoding.ASCII.GetBytes
+                |> ByteSegment
+            do! ws.send Text byteResponse true
+            return! loop ()
+        | (Close, _, _) ->
+            let emptyResponse = [||] |> ByteSegment
+            do! ws.send Close emptyResponse true
+            return ()
+        | _ -> return! loop ()
     }
 
     socket {
@@ -192,6 +183,10 @@ let webSock onConnect onDisconnect (ws : WebSocket) (ctx: HttpContext) =
         finally onDisconnect ctx
     }
 
+// Dummy functions, webSock testing...
+let onSock _ws _ctx = printfn "Socket connected."
+let offSock _ctx = printfn "Socket disconnected."
+
 // TODO: Screwing around.
 let wsAgent (ws: WebSocket) (ctx: HttpContext) =
     MailboxProcessor.Start(fun inbox ->
@@ -201,27 +196,20 @@ let wsAgent (ws: WebSocket) (ctx: HttpContext) =
         loop ()
     )
 
-let loginPlayer name = context (fun ctx ->
-        let player = { Name = name; ID = System.Guid.NewGuid(); Socket = ws }
-        let msg chan = Login (player , chan)
-        // TODO: Do I want to send this back to the client as well? Might not
-        // need to since HTTP requests can cover everything.
-        // What do I need to store in my player types and how do I use it?
-        // The ws function is running the socket, but I don't have a way
-        // to send that process things do I? I think I need to have an Agent
-        // hold on do it so it can pass in messages to be broadcasted?
-        let maybeSocket = handShake ws ctx
+// NOTE: This pattern will let me use path scan and do other things with the
+// context while returning what the client needs for the socket.
+let wsTest _str = fun ctx ->
+    handShake ws ctx
 
-        msg |> playerAgent.PostAndReply |> OK
-    )
-
-// let loginPlayer name =
-//     let msg chan = Login ({ Name = name; ID = System.Guid.NewGuid() } , chan)
-//     msg |> playerAgent.PostAndReply |> OK
+let loginPlayer name =
+    let msg chan = Login ({ Name = name; ID = System.Guid.NewGuid() } , chan)
+    msg |> playerAgent.PostAndReply |> OK
 
 let server =
     choose
-        [ GET >=> choose
+        [ // pathScan "/websocket/%s" wsTest
+          path "/websocket" >=> handShake (webSock onSock offSock)
+          GET >=> choose
               [ pathScan "/lobby_list/%s" getLobbies ]
           POST >=> choose
               [ pathScan "/login/%s" loginPlayer
