@@ -1,5 +1,6 @@
 namespace GameServer
 
+open Suave.Sockets
 open Suave.WebSocket
 
 type Name = string
@@ -38,3 +39,18 @@ type LobbyMessage =
     | Join of Name * Player * AsyncReplyChannel<string>
     | Leave of Name * Player
     | RequestList of AsyncReplyChannel<Map<Name, Lobby>>
+
+type SocketMessage =
+    | Send of Opcode * ByteSegment * bool
+    | Shut
+
+// TODO: Like so, and use a function to match byte arrays in to a SocketData?
+// Or just do an active pattern, that way there is one less place to change?
+// There could be a lot of cases though so it might be a bit ugly for an active.
+type SocketData =
+    | CreateLobby of string
+    | JoinLobby of Name
+    | LeaveLobby
+    | KickFromLobby of Name
+    | Chat of string
+    | NoByteFlagMatch

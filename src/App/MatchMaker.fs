@@ -134,7 +134,35 @@ let getLobbies (filterStr: string) =
     |> JsonConvert.SerializeObject
     |> OK
 
-let webSock onConnect onDisconnect (ws : WebSocket) (ctx: HttpContext) =
+// NOTE: Basic idea, simplify routing of messages coming in on player socket.
+// Actually, a type seems unnecessary here, I just need to send the body to the
+// correct handler function based on the first byte. Do that instead.
+let bytesToData (bs: byte array) =
+    match bs.[0] with
+    | 0uy -> CreateLobby (UTF8.toString bs.[1..])
+    | 1uy -> JoinLobby (UTF8.toString bs.[1..])
+    | 2uy -> LeaveLobby
+    | 3uy -> KickFromLobby (UTF8.toString bs.[1..])
+    | 4uy -> Chat (UTF8.toString bs.[1..])
+    | _ -> NoByteFlagMatch
+
+let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
+    let rec loop () = async {
+        match! inbox.Receive() with
+        | Send (op, data, fin) ->
+            let! _ = ws.send op data fin
+            return! loop ()
+        | Shut ->
+            let! _ = ws.send Close (ByteSegment [||]) true
+            return ()
+    }
+
+    loop ()
+)
+
+let playerSocket (ws : WebSocket) (_ctx: HttpContext) =
+    let agent = socketAgent ws
+
     let rec loop () = socket {
         match! ws.read() with
         | (Text, data, true) ->
@@ -143,32 +171,19 @@ let webSock onConnect onDisconnect (ws : WebSocket) (ctx: HttpContext) =
                 |> sprintf "response to %s"
                 |> System.Text.Encoding.ASCII.GetBytes
                 |> ByteSegment
-            do! ws.send Text response true
+            do agent.Post (Send (Text, response, true))
             return! loop ()
         | (Close, _, _) ->
-            do! ws.send Close (ByteSegment [||]) true
+            do agent.Post Shut
             return ()
         | _ -> return! loop ()
     }
 
     socket {
-        onConnect ws ctx
+        printfn "Socket Connected!"
         try do! loop ()
-        finally onDisconnect ctx
+        finally printfn "Socket Disconnected!"
     }
-
-// Dummy functions, webSock testing...
-let onSock _ws _ctx = printfn "Socket connected."
-let offSock _ctx = printfn "Socket disconnected."
-
-// TODO: Screwing around.
-let wsAgent (ws: WebSocket) (ctx: HttpContext) =
-    MailboxProcessor.Start(fun inbox ->
-        let rec loop () = async {
-            ()
-        }
-        loop ()
-    )
 
 // NOTE: This pattern will let me use path scan and do other things with the
 // context while returning what the client needs for the socket.
@@ -182,7 +197,8 @@ let loginPlayer name =
 let server =
     choose
         [ // pathScan "/websocket/%s" wsTest
-          path "/websocket" >=> handShake (webSock onSock offSock)
+          // path "/websocket" >=> handShake (webSock onSock offSock)
+          path "/websocket" >=> handShake playerSocket
           GET >=> choose
               [ pathScan "/lobby_list/%s" getLobbies ]
           POST >=> choose
