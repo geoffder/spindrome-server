@@ -17,8 +17,31 @@ type GameMode =
 
 type Limits = { Time: int; Score: int }
 
-// type Player = { Name: string; ID: System.Guid; Socket: WebSocket }
-type Player = { Name: string; ID: System.Guid }
+// type Player = { Name: string; ID: System.Guid }
+
+// type PlayerMessage =
+//     | Login of Player * AsyncReplyChannel<string>
+//     | Logout of System.Guid
+//     | GetPlayer of System.Guid * AsyncReplyChannel<PlayerInfo option>
+
+type SocketMessage =
+    | GetLobby of AsyncReplyChannel<string option>
+    | UpdateLobby of string option
+    | Send of Opcode * ByteSegment * bool
+    | Shut
+
+type PlayerInfo =
+    { Name: string
+      ID: System.Guid
+      Agent: MailboxProcessor<SocketMessage> }
+
+type PlayerState = { LobbyName: string option }
+
+type LobbyParams =
+    { Name: string
+      Mode: GameMode
+      Limits: Limits
+      Capacity: int }
 
 type Lobby =
     { Name: string
@@ -26,31 +49,11 @@ type Lobby =
       Mode: GameMode
       Limits: Limits
       Capacity: int
-      Host: Player
-      Players: Player list }
-
-type PlayerMessage =
-    | Login of Player * AsyncReplyChannel<string>
-    | Logout of System.Guid
-    | GetPlayer of System.Guid * AsyncReplyChannel<Player option>
+      Host: PlayerInfo
+      Players: PlayerInfo list }
 
 type LobbyMessage =
-    | Create of Lobby * AsyncReplyChannel<string>
-    | Join of Name * Player * AsyncReplyChannel<string>
-    | Leave of Name * Player
+    | Create of Lobby * AsyncReplyChannel<string option>
+    | Join of Name * PlayerInfo * AsyncReplyChannel<bool>
+    | Leave of Name * PlayerInfo
     | RequestList of AsyncReplyChannel<Map<Name, Lobby>>
-
-type SocketMessage =
-    | Send of Opcode * ByteSegment * bool
-    | Shut
-
-// TODO: Like so, and use a function to match byte arrays in to a SocketData?
-// Or just do an active pattern, that way there is one less place to change?
-// There could be a lot of cases though so it might be a bit ugly for an active.
-type SocketData =
-    | CreateLobby of string
-    | JoinLobby of Name
-    | LeaveLobby
-    | KickFromLobby of Name
-    | Chat of string
-    | NoByteFlagMatch
