@@ -1,3 +1,4 @@
 group Main
     Suave
     Newtonsoft.Json
+    WebSocketSharp
