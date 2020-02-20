@@ -1,26 +1,10 @@
-#r "/home/geoff/.nuget/packages/suave/2.5.6/lib/netstandard2.0/Suave.dll"
-#load "./MatchMaker.fs"
+//#r "/home/geoff/.nuget/packages/suave/2.5.6/lib/netstandard2.0/Suave.dll"
+#r "/home/geoff/.nuget/packages/websocketsharp/1.0.3-rc11/lib/websocket-sharp.dll"
+#r "/home/geoff/.nuget/packages/newtonsoft.json/12.0.3/lib/netstandard2.0/Newtonsoft.Json.dll"
 
-open Suave
-open Suave.Filters
-open Suave.Operators
-open Suave.Successful
+#load "Client.fs"
 
-open GameServer
-open GameServer.MatchMaker
+open Client
 
-let dummy =
-    choose
-        [ GET >=> choose
-              [ path "/lobby_list" >=> getLobbies ]
-          POST >=> choose
-              [ pathScan "/login/%s" loginPlayer
-                pathScan "/create_lobby/%s/%s/%i/%i/%s" createLobby
-                pathScan "/join_lobby/%s/%s" joinLobby ] ]
-
-// So the agents work if I create them in here, but trying to send them
-// messages when they have only been defined in the .fs file causes indefinite
-// hanging. I need to learn how to actually run my server as a compiled thing,
-// so running the agents and launching the server in a main function.
-
-startWebServer defaultConfig dummy
+let ws = login "ws://localhost:8080/websocket" ""
+do createLobby ws "foo" "last_man" 10 10 4

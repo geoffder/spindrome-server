@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Include="ServerTypes.fs" />
     <Compile Include="MatchMaker.fs" />
+    <Compile Include="Client.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 
