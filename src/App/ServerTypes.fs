@@ -50,4 +50,5 @@ type LobbyMessage =
     | Join of Name * PlayerInfo * AsyncReplyChannel<bool>
     | Leave of Name * PlayerInfo
     | Kick of Name * System.Guid * PlayerInfo
+    | Chat of Name * string * PlayerInfo
     | RequestList of AsyncReplyChannel<Map<Name, Lobby>>

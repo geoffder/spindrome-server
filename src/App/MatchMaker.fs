@@ -23,6 +23,9 @@ let broadcast agents str =
         a.Post <| Send (Text, strToBytes str, true)
     List.iter send agents
 
+// TODO: Very simplistic. Also, I should probably create a simplified
+// lobby / player info that doesn't have the agent references for example.
+// It's just extra junk getting packed in to the jsons going out.
 let broadcastObj agents tag =
     JsonConvert.SerializeObject
     >> sprintf "%s%s" tag
@@ -103,6 +106,10 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
                        | Some l -> loop (Map.add name l lobbies)
                        | None -> loop lobbies
                 else loop lobbies
+        | Chat (name, msg, player) ->
+            do sprintf "CHAT#%s: %s" player.Name msg
+            |> broadcast (getAgents lobbies.[name].Players)
+            return! loop lobbies
         | RequestList channel ->
             do channel.Reply lobbies
             return! loop lobbies
@@ -123,6 +130,9 @@ let createLobby json host =
            do host.Agent.Post (UpdateLobby someName)
            "Lobby created!"
     |> sendString host.Agent
+
+// TODO: Replace with has space? (local duo for example)
+let lobbyNotFull _name l = l.Players.Length < l.Capacity
 
 let joinLobby name player =
     fun chan -> Join (name, player, chan)
@@ -146,8 +156,10 @@ let kickFromLobby (kickID: string) player =
         |> lobbyAgent.Post
     | None -> ()
 
-// TODO: Replace with has space? (local duo for example)
-let lobbyNotFull _name l = l.Players.Length < l.Capacity
+let postChat msg player =
+    match player.Agent.PostAndReply GetLobby with
+    | Some name -> Chat (name, msg, player) |> lobbyAgent.Post
+    | None -> ()
 
 let getLobbyFilter str : (Name -> Lobby -> bool) list =
     match str with
@@ -201,7 +213,7 @@ let playerSocket name ws _ctx =
             | "JOIN" -> joinLobby (UTF8.toString data.[4..]) info
             | "DROP" -> leaveLobby info
             | "KICK" -> kickFromLobby (UTF8.toString data.[4..]) info
-            // | "CHAT" -> postChat (UTF8.toString data.[1..]) info
+            | "CHAT" -> postChat (UTF8.toString data.[4..]) info
             | _ -> ()
             return! loop ()
         | (Close, _, _) ->
