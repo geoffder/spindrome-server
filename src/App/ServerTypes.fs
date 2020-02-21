@@ -17,13 +17,6 @@ type GameMode =
 
 type Limits = { Time: int; Score: int }
 
-// type Player = { Name: string; ID: System.Guid }
-
-// type PlayerMessage =
-//     | Login of Player * AsyncReplyChannel<string>
-//     | Logout of System.Guid
-//     | GetPlayer of System.Guid * AsyncReplyChannel<PlayerInfo option>
-
 type SocketMessage =
     | GetLobby of AsyncReplyChannel<string option>
     | UpdateLobby of string option
@@ -56,4 +49,5 @@ type LobbyMessage =
     | Create of Lobby * AsyncReplyChannel<string option>
     | Join of Name * PlayerInfo * AsyncReplyChannel<bool>
     | Leave of Name * PlayerInfo
+    | Kick of Name * System.Guid * PlayerInfo
     | RequestList of AsyncReplyChannel<Map<Name, Lobby>>

@@ -4,8 +4,8 @@ open Newtonsoft.Json
 
 open Suave
 open Suave.Filters
-open Suave.Operators
-open Suave.Successful
+// open Suave.Operators
+// open Suave.Successful
 
 open Suave.Sockets
 open Suave.Sockets.Control
@@ -13,6 +13,10 @@ open Suave.WebSocket
 
 let strToBytes (str: string) =
     str |> System.Text.Encoding.ASCII.GetBytes |> ByteSegment
+
+let sendString (agent: MailboxProcessor<SocketMessage>) =
+    let msg data = Send (Text, data, true)
+    strToBytes >> msg >> agent.Post
 
 let newLobby host (ps: LobbyParams) =
     { Name = ps.Name
@@ -41,22 +45,8 @@ let applyFiltersToMap filters key value =
         | [] -> true
     apply filters
 
-// let playerAgent = MailboxProcessor.Start(fun inbox ->
-//
-//     let rec loop (players: Map<System.Guid, Player>) = async {
-//         match! inbox.Receive() with
-//         | Login (player, channel) ->
-//             do channel.Reply (sprintf "%s logged in" (player.ID.ToString()))
-//             return! loop (Map.add player.ID player players)
-//         | Logout id -> return! loop (Map.remove id players)
-//         | GetPlayer (id, channel) ->
-//             do channel.Reply (Map.tryFind id players)
-//             return! loop players
-//     }
-//
-//     loop (Map<System.Guid, Player> [])
-// )
-
+// TODO: Create a broadcast function that sends up to data lobby info
+// to the players inside each time there is a change.
 let lobbyAgent = MailboxProcessor.Start(fun inbox ->
 
     let rec loop (lobbies: Map<string, Lobby>) = async {
@@ -84,6 +74,18 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
                 |> function
                    | Some l -> loop (Map.add name l lobbies)
                    | None -> loop (Map.remove name lobbies)
+        | Kick (name, id, host) ->
+            let l = lobbies.[name]
+            return!
+                if host.ID = l.Host.ID then
+                    l.Players
+                    |> List.tryFind (fun i -> i.ID = id)
+                    |> Option.bind (fun p -> dropPlayer p l)
+                    |> function
+                       | Some l -> loop (Map.add name l lobbies)
+                       | None -> loop (Map.remove name lobbies)
+                else
+                    loop lobbies
         | RequestList channel ->
             do channel.Reply lobbies
             return! loop lobbies
@@ -92,28 +94,9 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
     loop (Map<string, Lobby> [])
 )
 
-// let getPlayer id =
-//     let msg chan = GetPlayer (id, chan)
-//     playerAgent.PostAndReply msg
-
-// let createLobby (name, mode, time, score, cap, id: string) =
-//     let buildLobby host =
-//         { Name = name
-//           ID = System.Guid.NewGuid()
-//           Mode = GameMode.FromString mode
-//           Limits = { Time = time; Score = score }
-//           Capacity = cap
-//           Host = host
-//           Players = [host] }
-//     let msg lobby chan = Create (lobby, chan)
-//     let sendNewLobby = buildLobby >> msg >> lobbyAgent.PostAndReply
-//     match getPlayer (System.Guid.Parse id) with
-//     | Some p -> p |> sendNewLobby |> OK
-//     | None -> OK "No such player ID is logged in."
-
 // TODO: Something like this as the new patter? Make type matching
 // json schema to use automatic Newtonsoft deserialization?
-let createLobby2 json host =
+let createLobby json host =
     json
     |> JsonConvert.DeserializeObject<LobbyParams>
     |> newLobby host
@@ -124,16 +107,9 @@ let createLobby2 json host =
        | someName ->
            do host.Agent.Post (UpdateLobby someName)
            "Lobby created!"
-    |> strToBytes
-    |> fun data -> host.Agent.Post (Send (Text, data, true))
+    |> sendString host.Agent
 
-// let joinLobby (name, id: string) =
-//     let msg player chan = Join (name, player, chan)
-//     match getPlayer (System.Guid.Parse id) with
-//     | Some p -> p |> msg |> lobbyAgent.PostAndReply |> OK
-//     | None -> OK "No such player ID is logged in."
-
-let joinLobby2 name player =
+let joinLobby name player =
     fun chan -> Join (name, player, chan)
     |> lobbyAgent.PostAndReply
     |> function
@@ -141,20 +117,18 @@ let joinLobby2 name player =
            do player.Agent.Post (UpdateLobby (Some name))
            sprintf "Joined %s!" name
        | false -> "Failed to join."
-    |> strToBytes
-    |> fun data -> player.Agent.Post (Send (Text, data, true))
+    |> sendString player.Agent
 
-// TODO: ? Add a player to lobby lookup to enable dropping from lobby when
-// connection is lost ?
-// let leaveLobby (id: string, lobbyName) =
-//     match getPlayer (System.Guid.Parse id) with
-//     | Some p -> Leave (lobbyName, p) |> lobbyAgent.Post
-//     | None -> ()
-//     OK "Lobby exited."
-
-let leaveLobby2 player =
+let leaveLobby player =
     match player.Agent.PostAndReply GetLobby with
     | Some name -> Leave (name, player) |> lobbyAgent.Post
+    | None -> ()
+
+let kickFromLobby (kickID: string) player =
+    match player.Agent.PostAndReply GetLobby with
+    | Some name ->
+        Kick (name, System.Guid.Parse kickID, player)
+        |> lobbyAgent.Post
     | None -> ()
 
 // TODO: Replace with has space? (local duo for example)
@@ -166,19 +140,7 @@ let getLobbyFilter str : (Name -> Lobby -> bool) list =
     | "boost_ball" -> [ fun _ l -> l.Mode = BoostBall ]
     | _ -> []
 
-let getLobbies (filterStr: string) =
-    let filters =
-        filterStr.Split "/"
-        |> List.ofArray
-        |> List.distinct
-        |> List.collect getLobbyFilter
-    RequestList
-    |> lobbyAgent.PostAndReply
-    |> Map.filter (applyFiltersToMap (lobbyNotFull :: filters))
-    |> JsonConvert.SerializeObject
-    |> OK
-
-let getLobbies2 bytes (wsAgent: MailboxProcessor<SocketMessage>) =
+let getLobbies bytes (wsAgent: MailboxProcessor<SocketMessage>) =
     let filters =
         bytes
         |> UTF8.toString
@@ -190,9 +152,7 @@ let getLobbies2 bytes (wsAgent: MailboxProcessor<SocketMessage>) =
     |> lobbyAgent.PostAndReply
     |> Map.filter (applyFiltersToMap (lobbyNotFull :: filters))
     |> JsonConvert.SerializeObject
-    |> strToBytes
-    |> fun data -> Send (Text, data, true)
-    |> wsAgent.Post
+    |> sendString wsAgent
 
 // TODO: Add some player state to this (e.g. what lobby)
 let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
@@ -213,22 +173,21 @@ let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
     loop { LobbyName = None }
 )
 
-let playerSocket2 (ws : WebSocket) _ctx =
+let playerSocket2 name ws _ctx =
     let agent = socketAgent ws
 
-    let info = { Name = "dummy"; ID = System.Guid.NewGuid(); Agent = agent }
+    let info = { Name = name; ID = System.Guid.NewGuid(); Agent = agent }
 
     let rec loop () = socket {
         match! ws.read() with
         | (Text, data, true) ->
-            // TODO: Pass in agent so that state can be updated?
-            // e.g. which lobby they are in.
             match UTF8.toString data.[0..3] with
-            | "HOST" -> createLobby2 (UTF8.toString data.[4..]) info
-            | "JOIN" -> joinLobby2 (UTF8.toString data.[4..]) info
-            | "DROP" -> leaveLobby2 info
-            // | 52uy -> kickFromLobby (UTF8.toString data.[1..])
-            // | 53uy -> postChat (UTF8.toString data.[1..])
+            | "LOBS" -> getLobbies data.[4..] info.Agent
+            | "HOST" -> createLobby (UTF8.toString data.[4..]) info
+            | "JOIN" -> joinLobby (UTF8.toString data.[4..]) info
+            | "DROP" -> leaveLobby info
+            | "KICK" -> kickFromLobby (UTF8.toString data.[4..]) info
+            // | "CHAT" -> postChat (UTF8.toString data.[1..]) info
             | _ -> ()
 
             return! loop ()
@@ -244,52 +203,8 @@ let playerSocket2 (ws : WebSocket) _ctx =
         finally printfn "Socket Disconnected!"
     }
 
-let playerSocket (ws : WebSocket) (_ctx: HttpContext) =
-    let agent = socketAgent ws
-
-    let rec loop () = socket {
-        match! ws.read() with
-        | (Text, data, true) ->
-            let response =
-                UTF8.toString data
-                |> sprintf "response to %s"
-                |> System.Text.Encoding.ASCII.GetBytes
-                |> ByteSegment
-            do agent.Post (Send (Text, response, true))
-            return! loop ()
-        | (Close, _, _) ->
-            do agent.Post Shut
-            return ()
-        | _ -> return! loop ()
-    }
-
-    socket {
-        printfn "Socket Connected!"
-        try do! loop ()
-        finally printfn "Socket Disconnected!"
-    }
-
-// NOTE: This pattern will let me use path scan and do other things with the
-// context while returning what the client needs for the socket.
-let wsTest _str = fun ctx ->
-    handShake playerSocket ctx
-
-// let loginPlayer name =
-//     let msg chan = Login ({ Name = name; ID = System.Guid.NewGuid() } , chan)
-//     msg |> playerAgent.PostAndReply |> OK
+let connectToPlayer name = fun ctx ->
+    handShake (playerSocket2 name) ctx
 
 let server =
-    choose [ path "/websocket" >=> handShake playerSocket2 ]
-
-// let server =
-//     choose
-//         [ // pathScan "/websocket/%s" wsTest
-//           // path "/websocket" >=> handShake (webSock onSock offSock)
-//           path "/websocket" >=> handShake playerSocket
-//           GET >=> choose
-//               [ pathScan "/lobby_list/%s" getLobbies ]
-//           POST >=> choose
-//               [ pathScan "/login/%s" loginPlayer
-//                 pathScan "/create_lobby/%s/%s/%i/%i/%i/%s" createLobby
-//                 pathScan "/join_lobby/%s/%s" joinLobby
-//                 pathScan "/leave_lobby/%s/%s" leaveLobby ] ]
+    choose [ pathScan "/websocket/%s" connectToPlayer ]
