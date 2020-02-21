@@ -18,6 +18,18 @@ let sendString (agent: MailboxProcessor<SocketMessage>) =
     let msg data = Send (Text, data, true)
     strToBytes >> msg >> agent.Post
 
+let broadcast agents str =
+    let send (a: MailboxProcessor<SocketMessage>) =
+        a.Post <| Send (Text, strToBytes str, true)
+    List.iter send agents
+
+let broadcastObj agents tag =
+    JsonConvert.SerializeObject
+    >> sprintf "%s%s" tag
+    >> broadcast agents
+
+let getAgents players = List.map (fun p -> p.Agent) players
+
 let newLobby host (ps: LobbyParams) =
     { Name = ps.Name
       ID = System.Guid.NewGuid()
@@ -34,10 +46,15 @@ let tryJoin lobby player =
 
 let dropPlayer player lobby =
     if player <> lobby.Host then
+        do sendString player.Agent "DROP!"
         match List.except [player] lobby.Players with
         | [] -> None
-        | ps -> Some { lobby with Players = ps }
-    else None
+        | ps ->
+            do broadcast (getAgents ps) "DROP!"
+            Some { lobby with Players = ps }
+    else
+        do broadcast (getAgents lobby.Players) "DROP!"
+        None
 
 let applyFiltersToMap filters key value =
     let rec apply = function
@@ -61,9 +78,10 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
                 return! lobbies |> Map.add lobby.Name lobby |> loop
         | Join (name, player, channel) ->
             match tryJoin lobbies.[name] player with
-            | Some lobby ->
+            | Some l ->
                 do channel.Reply true
-                return! loop (Map.add name lobby lobbies)
+                do broadcastObj (getAgents l.Players) "LOBBY" l
+                return! loop (Map.add name l lobbies)
             | None ->
                 do channel.Reply false
                 return! loop lobbies
@@ -83,9 +101,8 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
                     |> Option.bind (fun p -> dropPlayer p l)
                     |> function
                        | Some l -> loop (Map.add name l lobbies)
-                       | None -> loop (Map.remove name lobbies)
-                else
-                    loop lobbies
+                       | None -> loop lobbies
+                else loop lobbies
         | RequestList channel ->
             do channel.Reply lobbies
             return! loop lobbies
@@ -94,8 +111,6 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
     loop (Map<string, Lobby> [])
 )
 
-// TODO: Something like this as the new patter? Make type matching
-// json schema to use automatic Newtonsoft deserialization?
 let createLobby json host =
     json
     |> JsonConvert.DeserializeObject<LobbyParams>
@@ -114,7 +129,7 @@ let joinLobby name player =
     |> lobbyAgent.PostAndReply
     |> function
        | true ->
-           do player.Agent.Post (UpdateLobby (Some name))
+           do player.Agent.Post <| UpdateLobby (Some name)
            sprintf "Joined %s!" name
        | false -> "Failed to join."
     |> sendString player.Agent
@@ -154,7 +169,6 @@ let getLobbies bytes (wsAgent: MailboxProcessor<SocketMessage>) =
     |> JsonConvert.SerializeObject
     |> sendString wsAgent
 
-// TODO: Add some player state to this (e.g. what lobby)
 let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
     let rec loop state = async {
         match! inbox.Receive() with
@@ -173,7 +187,7 @@ let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
     loop { LobbyName = None }
 )
 
-let playerSocket2 name ws _ctx =
+let playerSocket name ws _ctx =
     let agent = socketAgent ws
 
     let info = { Name = name; ID = System.Guid.NewGuid(); Agent = agent }
@@ -189,7 +203,6 @@ let playerSocket2 name ws _ctx =
             | "KICK" -> kickFromLobby (UTF8.toString data.[4..]) info
             // | "CHAT" -> postChat (UTF8.toString data.[1..]) info
             | _ -> ()
-
             return! loop ()
         | (Close, _, _) ->
             do agent.Post Shut
@@ -204,7 +217,7 @@ let playerSocket2 name ws _ctx =
     }
 
 let connectToPlayer name = fun ctx ->
-    handShake (playerSocket2 name) ctx
+    handShake (playerSocket name) ctx
 
 let server =
     choose [ pathScan "/websocket/%s" connectToPlayer ]
