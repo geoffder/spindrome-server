@@ -6,4 +6,4 @@ NUGET
     Newtonsoft.Json (12.0.3)
     Suave (2.5.6)
       FSharp.Core (>= 4.3.4)
-    WebSocketSharp (1.0.3-rc11)
+    WebSocketSharp.Standard (1.0.3)

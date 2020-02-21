@@ -1,4 +1,4 @@
 group Main
     Suave
     Newtonsoft.Json
-    WebSocketSharp
+    WebSocketSharp.Standard
