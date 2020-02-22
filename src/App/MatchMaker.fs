@@ -50,13 +50,20 @@ let tryJoin lobby player =
 let dropPlayer player lobby =
     if player <> lobby.Host then
         do sendString player.Agent "DROP!"
+        do player.Agent.Post <| UpdateLobby None
         match List.except [player] lobby.Players with
         | [] -> None
         | ps ->
-            do broadcast (getAgents ps) "DROP!"
+            do player.ID.ToString ()
+            |> sprintf "DROP:%s"
+            |> broadcast (getAgents ps)
             Some { lobby with Players = ps }
     else
+        // TODO: Make a new socket message that bundles making
+        // LobbyName = None and telling the client.
         do broadcast (getAgents lobby.Players) "DROP!"
+        do getAgents lobby.Players
+        |> List.iter (fun a -> a.Post <| UpdateLobby None)
         None
 
 let applyFiltersToMap filters key value =
@@ -134,6 +141,7 @@ let createLobby json host =
 // TODO: Replace with has space? (local duo for example)
 let lobbyNotFull _name l = l.Players.Length < l.Capacity
 
+// TODO: Check that player isn't already in a lobby.
 let joinLobby name player =
     fun chan -> Join (name, player, chan)
     |> lobbyAgent.PostAndReply
