@@ -2,23 +2,7 @@ module Client
 
 open WebSocketSharp
 open Newtonsoft.Json
-
-type GameMode =
-    | LastMan
-    | BoostBall
-    static member FromString str =
-        match str with
-        | "last_man" -> LastMan
-        | "boost_ball" -> BoostBall
-        | _ -> LastMan
-
-type Limits = { Time: int; Score: int }
-
-type LobbyParams =
-    { Name: string
-      Mode: GameMode
-      Limits: Limits
-      Capacity: int }
+open GameServer
 
 let openSocket uri = new WebSocket (uri)
 
