@@ -1,8 +1,11 @@
 module Client
 
+open GameServer
+
 open WebSocketSharp
 open Newtonsoft.Json
-open GameServer
+
+let sendObj (ws: WebSocket) = JsonConvert.SerializeObject >> ws.Send
 
 let openSocket uri = new WebSocket (uri)
 
@@ -14,22 +17,18 @@ let login uri name =
 
 let createLobby (ws: WebSocket) name mode time score cap =
     { Name = name
-      Mode = GameMode.FromString mode
-      Limits = { Time = time; Score = score }
-      Capacity = cap }
-    |> JsonConvert.SerializeObject
-    |> sprintf "HOST%s"
-    |> ws.Send
+      Params = { Mode = GameMode.FromString mode
+                 Limits = { Time = time; Score = score }
+                 Capacity = cap } }
+    |> HostLobby
+    |> sendObj ws
 
-let chat (ws: WebSocket) msg = sprintf "CHAT%s" msg |> ws.Send
+let chat (ws: WebSocket) msg = ChatMessage msg |> sendObj ws
 
-let drop (ws: WebSocket) = ws.Send "DROP"
+let drop (ws: WebSocket) = LeaveLobby |> sendObj ws
 
-let join (ws: WebSocket) name = sprintf "JOIN%s" name |> ws.Send
+let join (ws: WebSocket) name = JoinLobby name |> sendObj ws
 
-let kick (ws: WebSocket) name = sprintf "KICK%s" name |> ws.Send
+let kick (ws: WebSocket) name = KickPlayer name |> sendObj ws
 
-let getLobbies (ws: WebSocket) filters =
-    List.reduce (fun acc f -> sprintf "%s/%s" acc f) filters
-    |> sprintf "LOBS%s"
-    |> ws.Send
+let getLobbies (ws: WebSocket) filters = GetLobbies filters |> sendObj ws

@@ -1,12 +1,10 @@
 module GameServer.MatchMaker
 
 open Newtonsoft.Json
-
 open Suave
 open Suave.Filters
 // open Suave.Operators
 // open Suave.Successful
-
 open Suave.Sockets
 open Suave.Sockets.Control
 open Suave.WebSocket
@@ -33,17 +31,15 @@ let broadcastObj agents tag =
 
 let getAgents players = List.map (fun p -> p.Agent) players
 
-let newLobby host (ps: LobbyParams) =
-    { Name = ps.Name
+let newLobby (l: NewLobby) host =
+    { Name = l.Name
       ID = System.Guid.NewGuid()
-      Mode = ps.Mode
-      Limits = ps.Limits
-      Capacity = ps.Capacity
+      Params = l.Params
       Host = host
       Players = [host] }
 
 let tryJoin lobby player =
-    if lobby.Players.Length < lobby.Capacity
+    if lobby.Players.Length < lobby.Params.Capacity
     then Some { lobby with Players = player :: lobby.Players }
     else None
 
@@ -128,10 +124,8 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
     loop (Map<string, Lobby> [])
 )
 
-let createLobby json host =
-    json
-    |> JsonConvert.DeserializeObject<LobbyParams>
-    |> newLobby host
+let createLobby specs host =
+    newLobby specs host
     |> fun lobby chan -> Create (lobby, chan)
     |> lobbyAgent.PostAndReply
     |> function
@@ -142,7 +136,7 @@ let createLobby json host =
     |> sendString host.Agent
 
 // TODO: Replace with has space? (local duo for example)
-let lobbyNotFull _name l = l.Players.Length < l.Capacity
+let lobbyNotFull _name l = l.Players.Length < l.Params.Capacity
 
 // TODO: Check that player isn't already in a lobby.
 let joinLobby name player =
@@ -160,10 +154,10 @@ let leaveLobby player =
     | Some name -> Leave (name, player) |> lobbyAgent.Post
     | None -> ()
 
-let kickFromLobby (kickID: string) player =
+let kickFromLobby kickID player =
     match player.Agent.PostAndReply GetLobby with
     | Some name ->
-        Kick (name, System.Guid.Parse kickID, player)
+        Kick (name, kickID, player)
         |> lobbyAgent.Post
     | None -> ()
 
@@ -174,18 +168,12 @@ let postChat msg player =
 
 let getLobbyFilter str : (Name -> Lobby -> bool) list =
     match str with
-    | "last_man" -> [ fun _ l -> l.Mode = LastMan ]
-    | "boost_ball" -> [ fun _ l -> l.Mode = BoostBall ]
+    | "last_man" -> [ fun _ l -> l.Params.Mode = LastMan ]
+    | "boost_ball" -> [ fun _ l -> l.Params.Mode = BoostBall ]
     | _ -> []
 
-let getLobbies bytes (wsAgent: MailboxProcessor<SocketMessage>) =
-    let filters =
-        bytes
-        |> UTF8.toString
-        |> fun str -> str.Split "/"
-        |> List.ofArray
-        |> List.distinct
-        |> List.collect getLobbyFilter
+let getLobbies strs (wsAgent: MailboxProcessor<SocketMessage>) =
+    let filters = List.collect getLobbyFilter strs
     RequestList
     |> lobbyAgent.PostAndReply
     |> Map.filter (applyFiltersToMap (lobbyNotFull :: filters))
@@ -227,18 +215,16 @@ let playerSocket name ws _ctx =
     let rec loop () = socket {
         match! ws.read() with
         | (Text, data, true) ->
-            // TODO: Make "schemas", one sum type with all the possible
-            // types of messages that could be sent on the socket (incoming
-            // and outgoing). That way server/client is consistent and can match
-            // on the communications elegantly.
-            match UTF8.toString data.[0..3] with
-            | "LOBS" -> getLobbies data.[4..] info.Agent
-            | "HOST" -> createLobby (UTF8.toString data.[4..]) info
-            | "JOIN" -> joinLobby (UTF8.toString data.[4..]) info
-            | "DROP" -> leaveLobby info
-            | "KICK" -> kickFromLobby (UTF8.toString data.[4..]) info
-            | "CHAT" -> postChat (UTF8.toString data.[4..]) info
-            | _ -> ()
+            data
+            |> UTF8.toString
+            |> JsonConvert.DeserializeObject<RequestSchema>
+            |> function
+               | GetLobbies filters -> getLobbies filters info.Agent
+               | HostLobby specs -> createLobby specs info
+               | JoinLobby name -> joinLobby name info
+               | LeaveLobby -> leaveLobby info
+               | KickPlayer id -> kickFromLobby id info
+               | ChatMessage msg -> postChat msg info
             return! loop ()
         | (Close, _, _) ->
             do agent.Post Shut
@@ -247,9 +233,11 @@ let playerSocket name ws _ctx =
     }
 
     socket {
-        printfn "Socket Connected!"
+        printfn "%s Connected!" name
         try do! loop ()
-        finally printfn "Socket Disconnected!"
+        finally
+            leaveLobby info
+            printfn "%s Disconnected!" name
     }
 
 let connectToPlayer name = fun ctx ->

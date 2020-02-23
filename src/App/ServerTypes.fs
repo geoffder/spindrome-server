@@ -36,18 +36,14 @@ type PlayerInfo =
 
 type PlayerState = { LobbyName: string option }
 
-type LobbyParams =
-    { Name: string
-      Mode: GameMode
-      Limits: Limits
-      Capacity: int }
+type LobbyParams = { Mode: GameMode; Limits: Limits; Capacity: int }
+
+type NewLobby = { Name: string; Params: LobbyParams }
 
 type Lobby =
     { Name: string
       ID: System.Guid
-      Mode: GameMode
-      Limits: Limits
-      Capacity: int
+      Params: LobbyParams
       Host: PlayerInfo
       Players: PlayerInfo list }
 
@@ -58,3 +54,11 @@ type LobbyMessage =
     | Kick of Name * System.Guid * PlayerInfo
     | Chat of Name * string * PlayerInfo
     | RequestList of AsyncReplyChannel<Map<Name, Lobby>>
+
+type RequestSchema =
+    | GetLobbies of string list
+    | HostLobby of NewLobby
+    | JoinLobby of string
+    | LeaveLobby
+    | KickPlayer of System.Guid
+    | ChatMessage of string
