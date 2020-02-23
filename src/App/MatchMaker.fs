@@ -48,23 +48,26 @@ let tryJoin lobby player =
     else None
 
 let dropPlayer player lobby =
+    match List.except [player] lobby.Players with
+    | [] -> None
+    | ps ->
+        do player.ID.ToString ()
+        |> sprintf "DROP:%s"
+        |> broadcast (getAgents ps)
+        Some { lobby with Players = ps }
+
+let exitLobby player lobby =
     if player <> lobby.Host then
-        do sendString player.Agent "DROP!"
-        do player.Agent.Post <| UpdateLobby None
-        match List.except [player] lobby.Players with
-        | [] -> None
-        | ps ->
-            do player.ID.ToString ()
-            |> sprintf "DROP:%s"
-            |> broadcast (getAgents ps)
-            Some { lobby with Players = ps }
+        do player.Agent.Post <| UpdateLobby Exit
+        dropPlayer player lobby
     else
-        // TODO: Make a new socket message that bundles making
-        // LobbyName = None and telling the client.
-        do broadcast (getAgents lobby.Players) "DROP!"
         do getAgents lobby.Players
-        |> List.iter (fun a -> a.Post <| UpdateLobby None)
+        |> List.iter (fun a -> a.Post <| UpdateLobby Closed)
         None
+
+let kickPlayer player lobby =
+    do player.Agent.Post <| UpdateLobby Kicked
+    dropPlayer player lobby
 
 let applyFiltersToMap filters key value =
     let rec apply = function
@@ -98,7 +101,7 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
         | Leave (name, player) ->
             return!
                 Map.tryFind name lobbies
-                |> Option.bind (fun l -> dropPlayer player l)
+                |> Option.bind (fun l -> exitLobby player l)
                 |> function
                    | Some l -> loop (Map.add name l lobbies)
                    | None -> loop (Map.remove name lobbies)
@@ -108,7 +111,7 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
                 if host.ID = l.Host.ID then
                     l.Players
                     |> List.tryFind (fun i -> i.ID = id)
-                    |> Option.bind (fun p -> dropPlayer p l)
+                    |> Option.bind (fun p -> kickPlayer p l)
                     |> function
                        | Some l -> loop (Map.add name l lobbies)
                        | None -> loop lobbies
@@ -132,10 +135,10 @@ let createLobby json host =
     |> fun lobby chan -> Create (lobby, chan)
     |> lobbyAgent.PostAndReply
     |> function
-       | None -> "Name is taken!"
-       | someName ->
-           do host.Agent.Post (UpdateLobby someName)
+       | Some name ->
+           do host.Agent.Post <| UpdateLobby (Joined name)
            "Lobby created!"
+       | None -> "Name is taken!"
     |> sendString host.Agent
 
 // TODO: Replace with has space? (local duo for example)
@@ -147,7 +150,7 @@ let joinLobby name player =
     |> lobbyAgent.PostAndReply
     |> function
        | true ->
-           do player.Agent.Post <| UpdateLobby (Some name)
+           do player.Agent.Post <| UpdateLobby (Joined name)
            sprintf "Joined %s!" name
        | false -> "Failed to join."
     |> sendString player.Agent
@@ -195,7 +198,16 @@ let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
         | GetLobby chan ->
             do chan.Reply state.LobbyName
             return! loop state
-        | UpdateLobby name -> return! loop { state with LobbyName = name }
+        | UpdateLobby change ->
+            match change with
+            | Joined name -> return! loop { state with LobbyName = Some name }
+            | Kicked ->
+                let! _ = ws.send Text (strToBytes "Kicked!") true
+                return! loop { state with LobbyName = None }
+            | Closed ->
+                let! _ = ws.send Text (strToBytes "Lobby Closed!") true
+                return! loop { state with LobbyName = None }
+            | Exit -> return! loop { state with LobbyName = None }
         | Send (op, data, fin) ->
             let! _ = ws.send op data fin
             return! loop state
@@ -215,6 +227,10 @@ let playerSocket name ws _ctx =
     let rec loop () = socket {
         match! ws.read() with
         | (Text, data, true) ->
+            // TODO: Make "schemas", one sum type with all the possible
+            // types of messages that could be sent on the socket (incoming
+            // and outgoing). That way server/client is consistent and can match
+            // on the communications elegantly.
             match UTF8.toString data.[0..3] with
             | "LOBS" -> getLobbies data.[4..] info.Agent
             | "HOST" -> createLobby (UTF8.toString data.[4..]) info

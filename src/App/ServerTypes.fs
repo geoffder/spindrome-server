@@ -17,9 +17,15 @@ type GameMode =
 
 type Limits = { Time: int; Score: int }
 
+type LobbyAction =
+    | Joined of string
+    | Kicked
+    | Closed
+    | Exit
+
 type SocketMessage =
     | GetLobby of AsyncReplyChannel<string option>
-    | UpdateLobby of string option
+    | UpdateLobby of LobbyAction
     | Send of Opcode * ByteSegment * bool
     | Shut
 
