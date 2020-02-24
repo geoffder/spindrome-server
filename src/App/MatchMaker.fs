@@ -16,18 +16,16 @@ let sendString (agent: MailboxProcessor<SocketMessage>) =
     let msg data = Send (Text, data, true)
     strToBytes >> msg >> agent.Post
 
+let sendObj (agent: MailboxProcessor<SocketMessage>) =
+    JsonConvert.SerializeObject >> sendString agent
+
 let broadcast agents str =
     let send (a: MailboxProcessor<SocketMessage>) =
         a.Post <| Send (Text, strToBytes str, true)
     List.iter send agents
 
-// TODO: Very simplistic. Also, I should probably create a simplified
-// lobby / player info that doesn't have the agent references for example.
-// It's just extra junk getting packed in to the jsons going out.
-let broadcastObj agents tag =
-    JsonConvert.SerializeObject
-    >> sprintf "%s%s" tag
-    >> broadcast agents
+let broadcastObj agents =
+    JsonConvert.SerializeObject >> broadcast agents
 
 let getAgents players = List.map (fun p -> p.Agent) players
 
@@ -35,6 +33,7 @@ let newLobby (l: NewLobby) host =
     { Name = l.Name
       ID = System.Guid.NewGuid()
       Params = l.Params
+      ChatNonce = 0
       Host = host
       Players = [host] }
 
@@ -47,9 +46,7 @@ let dropPlayer player lobby =
     match List.except [player] lobby.Players with
     | [] -> None
     | ps ->
-        do player.ID.ToString ()
-        |> sprintf "DROP:%s"
-        |> broadcast (getAgents ps)
+        do Departure player.ID |> broadcastObj (getAgents ps)
         Some { lobby with Players = ps }
 
 let exitLobby player lobby =
@@ -71,10 +68,7 @@ let applyFiltersToMap filters key value =
         | [] -> true
     apply filters
 
-// TODO: Create a broadcast function that sends up to data lobby info
-// to the players inside each time there is a change.
 let lobbyAgent = MailboxProcessor.Start(fun inbox ->
-
     let rec loop (lobbies: Map<string, Lobby>) = async {
         match! inbox.Receive() with
         | Create (lobby, channel) ->
@@ -89,7 +83,7 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
             match tryJoin lobbies.[name] player with
             | Some l ->
                 do channel.Reply true
-                do broadcastObj (getAgents l.Players) "LOBBY" l
+                do broadcastObj (getAgents l.Players) (Arrival player.ID)
                 return! loop (Map.add name l lobbies)
             | None ->
                 do channel.Reply false
@@ -113,9 +107,14 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
                        | None -> loop lobbies
                 else loop lobbies
         | Chat (name, msg, player) ->
-            do sprintf "CHAT#%s: %s" player.Name msg
-            |> broadcast (getAgents lobbies.[name].Players)
-            return! loop lobbies
+            let l = lobbies.[name]
+            { Author = player.Name; Contents = msg; Nonce = l.ChatNonce }
+            |> Chatter
+            |> broadcastObj (getAgents l.Players)
+            return!
+                lobbies
+                |> Map.add name { l with ChatNonce = l.ChatNonce + 1 }
+                |> loop
         | RequestList channel ->
             do channel.Reply lobbies
             return! loop lobbies
@@ -209,7 +208,6 @@ let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
 
 let playerSocket name ws _ctx =
     let agent = socketAgent ws
-
     let info = { Name = name; ID = System.Guid.NewGuid(); Agent = agent }
 
     let rec loop () = socket {
@@ -233,9 +231,9 @@ let playerSocket name ws _ctx =
     }
 
     socket {
-        printfn "%s Connected!" name
+        do printfn "%s Connected!" name
         try do! loop ()
-        finally
+        finally do
             leaveLobby info
             printfn "%s Disconnected!" name
     }

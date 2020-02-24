@@ -44,6 +44,7 @@ type Lobby =
     { Name: string
       ID: System.Guid
       Params: LobbyParams
+      ChatNonce: int
       Host: PlayerInfo
       Players: PlayerInfo list }
 
@@ -55,6 +56,8 @@ type LobbyMessage =
     | Chat of Name * string * PlayerInfo
     | RequestList of AsyncReplyChannel<Map<Name, Lobby>>
 
+type ChatPost = { Author: string; Contents: string; Nonce: int }
+
 type RequestSchema =
     | GetLobbies of string list
     | HostLobby of NewLobby
@@ -62,3 +65,30 @@ type RequestSchema =
     | LeaveLobby
     | KickPlayer of System.Guid
     | ChatMessage of string
+
+type JoinResult =
+    | LobbyJoined
+    | NoSpace
+    | NoSuchLobby
+
+type HostResult =
+    | LobbyCreated
+    | NameExists
+    | NameForbidden
+
+// TODO: Figure out what I need for this, don't really need a name right?
+// Need enough to make UDP connections and associate packets with the correct
+// players.
+type PeerInfo = { Name: string; Num: int; ID: System.Guid; IP: string }
+
+type LobbyUpdate =
+    | Arrival of System.Guid
+    | Departure of System.Guid
+    | ChangedParams of LobbyParams
+    | PeerInfo of PeerInfo list
+
+type ResponseSchema =
+    | JoinResult of JoinResult
+    | HostResult of HostResult
+    | Chatter of ChatPost
+    | LobbyUpdate of LobbyUpdate
