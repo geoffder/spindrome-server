@@ -4,13 +4,23 @@ open GameServer
 
 open WebSocketSharp
 open Newtonsoft.Json
+open System.Net
+open System.Net.Sockets
 
 let sendObj (ws: WebSocket) = JsonConvert.SerializeObject >> ws.Send
+
+let getIP () =
+    use s = new Socket(AddressFamily.InterNetwork,
+                       SocketType.Dgram,
+                       ProtocolType.IP)
+    s.Connect("8.8.8.8", 65530)
+    let endpoint = s.LocalEndPoint :?> IPEndPoint
+    endpoint.Address.ToString()
 
 let openSocket uri = new WebSocket (uri)
 
 let login uri name =
-    let ws = sprintf "%s/%s" uri name |> openSocket
+    let ws = sprintf "%s/%s/%s/3074" uri name (getIP ()) |> openSocket
     ws.Connect ()
     ws.OnMessage.Add (fun m -> printfn "%A" m.Data)
     ws
