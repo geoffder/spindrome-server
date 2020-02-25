@@ -9,10 +9,13 @@ open System.Net.Sockets
 
 let sendObj (ws: WebSocket) = JsonConvert.SerializeObject >> ws.Send
 
+// TODO: I'm an idiot, I will get the address off of the websocket
+// on the server. Just get rid of this (which on testing is just giving a
+// local IP [of course])
 let getIP () =
     use s = new Socket(AddressFamily.InterNetwork,
                        SocketType.Dgram,
-                       ProtocolType.IP)
+                       ProtocolType.Udp)
     s.Connect("8.8.8.8", 65530)
     let endpoint = s.LocalEndPoint :?> IPEndPoint
     endpoint.Address.ToString()
