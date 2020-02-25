@@ -2,6 +2,7 @@ namespace GameServer
 
 open Suave.Sockets
 open Suave.WebSocket
+open System.Net
 
 type Name = string
 type Cap = int
@@ -32,6 +33,7 @@ type SocketMessage =
 type PlayerInfo =
     { Name: string
       ID: System.Guid
+      IP: IPEndPoint
       Agent: MailboxProcessor<SocketMessage> }
 
 type PlayerState = { LobbyName: string option }
@@ -42,15 +44,26 @@ type NewLobby = { Name: string; Params: LobbyParams }
 
 type Lobby =
     { Name: string
-      ID: System.Guid
       Params: LobbyParams
       ChatNonce: int
       Host: PlayerInfo
       Players: PlayerInfo list }
 
+// NOTE: Speculative type for sending lobby info to clients.
+type LobbyInfo =
+    { Name: string
+      Params: LobbyParams
+      HostName: string
+      Population: int }
+
+type JoinResult =
+    | LobbyJoined
+    | JoinFailed
+    | AlreadyInLobby
+
 type LobbyMessage =
     | Create of Lobby * AsyncReplyChannel<string option>
-    | Join of Name * PlayerInfo * AsyncReplyChannel<bool>
+    | Join of Name * PlayerInfo * AsyncReplyChannel<JoinResult>
     | Leave of Name * PlayerInfo
     | Kick of Name * System.Guid * PlayerInfo
     | Chat of Name * string * PlayerInfo
@@ -66,24 +79,16 @@ type RequestSchema =
     | KickPlayer of System.Guid
     | ChatMessage of string
 
-type JoinResult =
-    | LobbyJoined
-    | NoSpace
-    | NoSuchLobby
-
 type HostResult =
     | LobbyCreated
     | NameExists
     | NameForbidden
 
-// TODO: Figure out what I need for this, don't really need a name right?
-// Need enough to make UDP connections and associate packets with the correct
-// players.
-type PeerInfo = { Name: string; Num: int; ID: System.Guid; IP: string }
+type PeerInfo = { Name: string; Num: int; IP: IPEndPoint }
 
 type LobbyUpdate =
-    | Arrival of System.Guid
-    | Departure of System.Guid
+    | Arrival of Name
+    | Departure of Name
     | ChangedParams of LobbyParams
     | PeerInfo of PeerInfo list
 
