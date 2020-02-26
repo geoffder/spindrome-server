@@ -37,10 +37,11 @@ let newLobby (l: NewLobby) host =
       Host = host
       Players = [host] }
 
-let tryJoin player lobby =
-    if lobby.Players.Length < lobby.Params.Capacity
-    then Some { lobby with Players = player :: lobby.Players }
-    else None
+let getLobbyInfo (l: Lobby) =
+    { Name = l.Name
+      Params = l.Params
+      HostName = l.Host.Name
+      Population = l.Players.Length }
 
 let dropPlayer player lobby =
     match List.except [player] lobby.Players with
@@ -68,8 +69,48 @@ let applyFiltersToMap filters key value =
         | [] -> true
     apply filters
 
-let lobbyAgent = MailboxProcessor.Start(fun inbox ->
-    let rec loop (lobbies: Map<string, Lobby>) = async {
+let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
+    let rec loop l = async {
+        match! inbox.Receive() with
+        | Join (player, channel) ->
+            if l.Players.Length < l.Params.Capacity then
+                do channel.Reply <| Some { Name = l.Name; LobbyAgent = inbox }
+                do broadcastObj (getAgents l.Players) (Arrival player.Name)
+                return! loop { l with Players = player :: l.Players }
+            else
+                do channel.Reply None
+                return! loop l
+        | Leave player ->
+            match exitLobby player l with
+            | Some lob -> return! loop lob
+            | None ->
+                do man.Post <| CloseLobby l.Name
+                return ()
+        | Kick (id, host) ->
+            if l.Host.ID = host.ID then
+                return!
+                    l.Players
+                    |> List.tryFind (fun i -> i.ID = id)
+                    |> Option.bind (fun p -> kickPlayer p l)
+                    |> function
+                       | Some lob -> loop lob
+                       | None -> loop l
+            else return! loop l
+        | Chat (msg, player) ->
+            do { Author = player.Name; Contents = msg; Nonce = l.ChatNonce }
+            |> Chatter
+            |> broadcastObj (getAgents l.Players)
+            return! loop { l with ChatNonce = l.ChatNonce + 1 }
+        | GetInfo channel ->
+            do channel.Reply <| getLobbyInfo l
+            return! loop l
+    }
+
+    loop initial
+)
+
+let lobbyManager = MailboxProcessor.Start(fun inbox ->
+    let rec loop (lobbies: Map<string, LobbyRef>) = async {
         match! inbox.Receive() with
         | Create (lobby, channel) ->
             match Map.containsKey lobby.Name lobbies with
@@ -77,101 +118,72 @@ let lobbyAgent = MailboxProcessor.Start(fun inbox ->
                 do channel.Reply None
                 return! loop lobbies
             | false ->
-                do channel.Reply (Some lobby.Name)
-                return! lobbies |> Map.add lobby.Name lobby |> loop
-        | Join (name, player, channel) ->
-            return!
-                Map.tryFind name lobbies
-                |> Option.bind (tryJoin player)
-                |> function
-                   | Some l ->
-                       do channel.Reply LobbyJoined
-                       do broadcastObj (getAgents l.Players) (Arrival player.Name)
-                       loop (Map.add name l lobbies)
-                   | None ->
-                       do channel.Reply JoinFailed
-                       loop lobbies
-        | Leave (name, player) ->
-            return!
-                Map.tryFind name lobbies
-                |> Option.bind (fun l -> exitLobby player l)
-                |> function
-                   | Some l -> loop (Map.add name l lobbies)
-                   | None -> loop (Map.remove name lobbies)
-        | Kick (name, id, host) ->
-            match Map.tryFind name lobbies with
-            | Some l when l.Host.ID = host.ID ->
-                return!
-                    l.Players
-                    |> List.tryFind (fun i -> i.ID = id)
-                    |> Option.bind (fun p -> kickPlayer p l)
-                    |> function
-                       | Some l -> loop (Map.add name l lobbies)
-                       | None -> loop lobbies
-            | _ -> return! loop lobbies
-        | Chat (name, msg, player) ->
-            match Map.tryFind name lobbies with
-            | Some l ->
-                { Author = player.Name; Contents = msg; Nonce = l.ChatNonce }
-                |> Chatter
-                |> broadcastObj (getAgents l.Players)
-                return!
-                    lobbies
-                    |> Map.add name { l with ChatNonce = l.ChatNonce + 1 }
-                    |> loop
-            | None -> return! loop lobbies
+                let l = { Name = lobby.Name
+                          LobbyAgent = lobbyAgent inbox lobby }
+                do channel.Reply <| Some l
+                return! lobbies |> Map.add lobby.Name l |> loop
+        | CloseLobby name -> return! lobbies |> Map.remove name |> loop
+        | LookupLobby (name, channel) ->
+            do channel.Reply <| Map.tryFind name lobbies
+            return! loop lobbies
         | RequestList channel ->
-            do channel.Reply lobbies
+            lobbies
+            |> Map.map (fun _ l -> l.LobbyAgent.PostAndReply GetInfo)
+            |> channel.Reply
             return! loop lobbies
     }
 
-    loop (Map<string, Lobby> [])
+    loop (Map<string, LobbyRef> [])
 )
 
-let createLobby specs host =
-    newLobby specs host
-    |> fun lobby chan -> Create (lobby, chan)
-    |> lobbyAgent.PostAndReply
-    |> function
-       | Some name ->
-           do host.Agent.Post <| UpdateLobby (Joined name)
-           "Lobby created!"
-       | None -> "Name is taken!"
-    |> sendString host.Agent
+let forbidden = Set.ofList [ "the n-word (hard R)" ]
+
+let createLobby (specs: NewLobby) host =
+    if not <| Set.contains specs.Name forbidden then
+        newLobby specs host
+        |> fun lobby chan -> Create (lobby, chan)
+        |> lobbyManager.PostAndReply
+        |> function
+           | Some l ->
+               do host.Agent.Post <| UpdateLobby (Joined l)
+               LobbyCreated
+           | None -> NameExists
+    else NameForbidden
+    |> sendObj host.Agent
 
 // TODO: Replace with has space? (local duo for example)
-let lobbyNotFull _name l = l.Players.Length < l.Params.Capacity
+let lobbyNotFull _name l = l.Population < l.Params.Capacity
 
 let joinLobby name player =
-    if (player.Agent.PostAndReply GetLobby) = None then
-        fun chan -> Join (name, player, chan)
-        |> lobbyAgent.PostAndReply
+    let joinMsg chan = Join (player, chan)
+    if (player.Agent.PostAndReply CurrentLobby) = None then
+        fun chan -> LookupLobby (name, chan)
+        |> lobbyManager.PostAndReply
+        |> Option.bind (fun l -> l.LobbyAgent.PostAndReply joinMsg)
         |> function
-           | LobbyJoined ->
-               do player.Agent.Post <| UpdateLobby (Joined name)
+           | Some l ->
+               do player.Agent.Post <| UpdateLobby (Joined l)
                LobbyJoined
-           | _ -> JoinFailed
+           | None -> NoSpace
     else AlreadyInLobby
     |> sendObj player.Agent
 
 let leaveLobby player =
-    match player.Agent.PostAndReply GetLobby with
-    | Some name -> Leave (name, player) |> lobbyAgent.Post
+    match player.Agent.PostAndReply CurrentLobby with
+    | Some l -> Leave player |> l.LobbyAgent.Post
     | None -> ()
 
 let kickFromLobby kickID player =
-    match player.Agent.PostAndReply GetLobby with
-    | Some name ->
-        Kick (name, kickID, player)
-        |> lobbyAgent.Post
+    match player.Agent.PostAndReply CurrentLobby with
+    | Some l -> Kick (kickID, player) |> l.LobbyAgent.Post
     | None -> ()
 
 let postChat msg player =
-    match player.Agent.PostAndReply GetLobby with
-    | Some name -> Chat (name, msg, player) |> lobbyAgent.Post
+    match player.Agent.PostAndReply CurrentLobby with
+    | Some l -> Chat (msg, player) |> l.LobbyAgent.Post
     | None -> ()
 
-let getLobbyFilter str : (Name -> Lobby -> bool) list =
+let getLobbyFilter str : (Name -> LobbyInfo -> bool) list =
     match str with
     | "last_man" -> [ fun _ l -> l.Params.Mode = LastMan ]
     | "boost_ball" -> [ fun _ l -> l.Params.Mode = BoostBall ]
@@ -180,27 +192,26 @@ let getLobbyFilter str : (Name -> Lobby -> bool) list =
 let getLobbies strs (wsAgent: MailboxProcessor<SocketMessage>) =
     let filters = List.collect getLobbyFilter strs
     RequestList
-    |> lobbyAgent.PostAndReply
+    |> lobbyManager.PostAndReply
     |> Map.filter (applyFiltersToMap (lobbyNotFull :: filters))
-    |> JsonConvert.SerializeObject
-    |> sendString wsAgent
+    |> sendObj wsAgent
 
 let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
     let rec loop state = async {
         match! inbox.Receive() with
-        | GetLobby chan ->
-            do chan.Reply state.LobbyName
+        | CurrentLobby chan ->
+            do chan.Reply state.Location
             return! loop state
         | UpdateLobby change ->
             match change with
-            | Joined name -> return! loop { state with LobbyName = Some name }
+            | Joined lobby -> return! loop { state with Location = Some lobby }
             | Kicked ->
                 let! _ = ws.send Text (strToBytes "Kicked!") true
-                return! loop { state with LobbyName = None }
+                return! loop { state with Location = None }
             | Closed ->
                 let! _ = ws.send Text (strToBytes "Lobby Closed!") true
-                return! loop { state with LobbyName = None }
-            | Exit -> return! loop { state with LobbyName = None }
+                return! loop { state with Location = None }
+            | Exit -> return! loop { state with Location = None }
         | Send (op, data, fin) ->
             let! _ = ws.send op data fin
             return! loop state
@@ -209,15 +220,16 @@ let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
             return ()
     }
 
-    loop { LobbyName = None }
+    loop { Location = None }
 )
 
-let playerSocket name ip ws _ctx =
+let playerSocket name ws (ctx: HttpContext) =
     let agent = socketAgent ws
+
     let info =
         { Name = name
           ID = System.Guid.NewGuid()
-          IP = ip
+          IP = IPEndPoint (ctx.clientIpTrustProxy, 3047)
           Agent = agent }
 
     let rec loop () = socket {
@@ -248,9 +260,15 @@ let playerSocket name ip ws _ctx =
             printfn "%s Disconnected!" name
     }
 
-let connectToPlayer (name, (addr: string), port) = fun ctx ->
-    let ip = IPEndPoint (IPAddress.Parse addr, port)
-    handShake (playerSocket name ip) ctx
+let connectToPlayer name = fun ctx ->
+    handShake (playerSocket name) ctx
 
 let server =
-    choose [ pathScan "/websocket/%s/%s/%i" connectToPlayer ]
+    choose [ pathScan "/websocket/%s" connectToPlayer ]
+
+// let connectToPlayer (name, (addr: string), port) = fun ctx ->
+//     let ip = IPEndPoint (IPAddress.Parse addr, port)
+//     handShake (playerSocket name ip) ctx
+
+// let server =
+//     choose [ pathScan "/websocket/%s/%s/%i" connectToPlayer ]
