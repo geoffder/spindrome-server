@@ -35,7 +35,7 @@ type LobbyMessage =
     | Leave of PlayerInfo
     | Kick of System.Guid * PlayerInfo
     | Chat of string * PlayerInfo
-    | GetInfo of AsyncReplyChannel<LobbyInfo>
+    | GetInfo of AsyncReplyChannel<LobbyInfo option>
 
 and LobbyRef = { Name: string; LobbyAgent: Agent<LobbyMessage> }
 
@@ -68,9 +68,10 @@ type Lobby =
 
 type ManagerMessage =
     | Create of Lobby * AsyncReplyChannel<LobbyRef option>
-    | CloseLobby of Name
+    | DelistLobby of Name
+    | RelistLobby of LobbyRef
     | LookupLobby of Name * AsyncReplyChannel<LobbyRef option>
-    | RequestList of AsyncReplyChannel<Map<Name, LobbyInfo>>
+    | RequestList of AsyncReplyChannel<LobbyInfo list>
 
 type PeerInfo = { Name: string; Num: int; IP: IPEndPoint }
 

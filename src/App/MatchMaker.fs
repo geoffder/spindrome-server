@@ -63,9 +63,9 @@ let kickPlayer player lobby =
     do player.Agent.Post <| UpdateLobby Kicked
     dropPlayer player lobby
 
-let applyFiltersToMap filters key value =
+let applyFiltersToList filters ele =
     let rec apply = function
-        | f :: t -> if f key value then apply t else false
+        | f :: t -> if f ele then apply t else false
         | [] -> true
     apply filters
 
@@ -84,7 +84,7 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
             match exitLobby player l with
             | Some lob -> return! loop lob
             | None ->
-                do man.Post <| CloseLobby l.Name
+                do man.Post <| DelistLobby l.Name
                 return ()
         | Kick (id, host) ->
             if l.Host.ID = host.ID then
@@ -102,14 +102,19 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
             |> broadcastObj (getAgents l.Players)
             return! loop { l with ChatNonce = l.ChatNonce + 1 }
         | GetInfo channel ->
-            do channel.Reply <| getLobbyInfo l
+            if l.Players.Length < l.Params.Capacity
+            then do channel.Reply <| Some (getLobbyInfo l)
+            else do channel.Reply None
             return! loop l
     }
-
     loop initial
 )
 
 let lobbyManager = MailboxProcessor.Start(fun inbox ->
+    let tryGetInfo l =
+        l.LobbyAgent.TryPostAndReply (GetInfo, ?timeout = Some 1000)
+        |> function | Some info -> info | None -> None
+                                         
     let rec loop (lobbies: Map<string, LobbyRef>) = async {
         match! inbox.Receive() with
         | Create (lobby, channel) ->
@@ -122,17 +127,18 @@ let lobbyManager = MailboxProcessor.Start(fun inbox ->
                           LobbyAgent = lobbyAgent inbox lobby }
                 do channel.Reply <| Some l
                 return! lobbies |> Map.add lobby.Name l |> loop
-        | CloseLobby name -> return! lobbies |> Map.remove name |> loop
+        | DelistLobby name -> return! lobbies |> Map.remove name |> loop
+        | RelistLobby l -> return! lobbies |> Map.add l.Name l |> loop
         | LookupLobby (name, channel) ->
             do channel.Reply <| Map.tryFind name lobbies
             return! loop lobbies
         | RequestList channel ->
             lobbies
-            |> Map.map (fun _ l -> l.LobbyAgent.PostAndReply GetInfo)
+            |> Map.toList
+            |> List.choose (fun (_, l) -> tryGetInfo l)
             |> channel.Reply
             return! loop lobbies
     }
-
     loop (Map<string, LobbyRef> [])
 )
 
@@ -151,20 +157,19 @@ let createLobby (specs: NewLobby) host =
     else NameForbidden
     |> sendObj host.Agent
 
-// TODO: Replace with has space? (local duo for example)
-let lobbyNotFull _name l = l.Population < l.Params.Capacity
-
 let joinLobby name player =
     let joinMsg chan = Join (player, chan)
+    let tryJoin l = l.LobbyAgent.TryPostAndReply (joinMsg, ?timeout = Some 1000)
     if (player.Agent.PostAndReply CurrentLobby) = None then
         fun chan -> LookupLobby (name, chan)
         |> lobbyManager.PostAndReply
-        |> Option.bind (fun l -> l.LobbyAgent.PostAndReply joinMsg)
+        |> Option.bind tryJoin
         |> function
-           | Some l ->
+           | Some (Some l) ->
                do player.Agent.Post <| UpdateLobby (Joined l)
                LobbyJoined
-           | None -> NoSpace
+           | Some None -> NoSpace
+           | None -> NoSuchLobby
     else AlreadyInLobby
     |> sendObj player.Agent
 
@@ -183,17 +188,17 @@ let postChat msg player =
     | Some l -> Chat (msg, player) |> l.LobbyAgent.Post
     | None -> ()
 
-let getLobbyFilter str : (Name -> LobbyInfo -> bool) list =
+let getLobbyFilter str : (LobbyInfo -> bool) list =
     match str with
-    | "last_man" -> [ fun _ l -> l.Params.Mode = LastMan ]
-    | "boost_ball" -> [ fun _ l -> l.Params.Mode = BoostBall ]
+    | "last_man" -> [ fun l -> l.Params.Mode = LastMan ]
+    | "boost_ball" -> [ fun l -> l.Params.Mode = BoostBall ]
     | _ -> []
 
 let getLobbies strs (wsAgent: MailboxProcessor<SocketMessage>) =
     let filters = List.collect getLobbyFilter strs
     RequestList
     |> lobbyManager.PostAndReply
-    |> Map.filter (applyFiltersToMap (lobbyNotFull :: filters))
+    |> List.filter (applyFiltersToList filters)
     |> sendObj wsAgent
 
 let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
@@ -257,6 +262,7 @@ let playerSocket name ws (ctx: HttpContext) =
         try do! loop ()
         finally do
             leaveLobby info
+            agent.Post Shut
             printfn "%s Disconnected!" name
     }
 
