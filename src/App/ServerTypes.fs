@@ -6,6 +6,7 @@ open System.Net
 
 type Name = string
 type Cap = int
+type Agent<'T> = MailboxProcessor<'T>
 
 type GameMode =
     | LastMan
@@ -18,36 +19,9 @@ type GameMode =
 
 type Limits = { Time: int; Score: int }
 
-type LobbyAction =
-    | Joined of string
-    | Kicked
-    | Closed
-    | Exit
-
-type SocketMessage =
-    | GetLobby of AsyncReplyChannel<string option>
-    | UpdateLobby of LobbyAction
-    | Send of Opcode * ByteSegment * bool
-    | Shut
-
-type PlayerInfo =
-    { Name: string
-      ID: System.Guid
-      IP: IPEndPoint
-      Agent: MailboxProcessor<SocketMessage> }
-
-type PlayerState = { LobbyName: string option }
-
 type LobbyParams = { Mode: GameMode; Limits: Limits; Capacity: int }
 
 type NewLobby = { Name: string; Params: LobbyParams }
-
-type Lobby =
-    { Name: string
-      Params: LobbyParams
-      ChatNonce: int
-      Host: PlayerInfo
-      Players: PlayerInfo list }
 
 // NOTE: Speculative type for sending lobby info to clients.
 type LobbyInfo =
@@ -56,35 +30,62 @@ type LobbyInfo =
       HostName: string
       Population: int }
 
+type LobbyMessage =
+    | Join of PlayerInfo * AsyncReplyChannel<LobbyRef option>
+    | Leave of PlayerInfo
+    | Kick of System.Guid * PlayerInfo
+    | Chat of string * PlayerInfo
+    | GetInfo of AsyncReplyChannel<LobbyInfo>
+
+and LobbyRef = { Name: string; LobbyAgent: Agent<LobbyMessage> }
+
+and LobbyAction =
+    | Joined of LobbyRef
+    | Kicked
+    | Closed
+    | Exit
+
+and  PlayerInfo =
+    { Name: string
+      ID: System.Guid
+      IP: IPEndPoint
+      Agent: Agent<SocketMessage> }
+
+and SocketMessage =
+    | CurrentLobby of AsyncReplyChannel<LobbyRef option>
+    | UpdateLobby of LobbyAction
+    | Send of Opcode * ByteSegment * bool
+    | Shut
+
+type PlayerState = { Location: LobbyRef option }
+
+type Lobby =
+    { Name: string
+      Params: LobbyParams
+      ChatNonce: int
+      Host: PlayerInfo
+      Players: PlayerInfo list }
+
+type ManagerMessage =
+    | Create of Lobby * AsyncReplyChannel<LobbyRef option>
+    | CloseLobby of Name
+    | LookupLobby of Name * AsyncReplyChannel<LobbyRef option>
+    | RequestList of AsyncReplyChannel<Map<Name, LobbyInfo>>
+
+type PeerInfo = { Name: string; Num: int; IP: IPEndPoint }
+
 type JoinResult =
     | LobbyJoined
-    | JoinFailed
+    | NoSpace
+    | NoSuchLobby
     | AlreadyInLobby
-
-type LobbyMessage =
-    | Create of Lobby * AsyncReplyChannel<string option>
-    | Join of Name * PlayerInfo * AsyncReplyChannel<JoinResult>
-    | Leave of Name * PlayerInfo
-    | Kick of Name * System.Guid * PlayerInfo
-    | Chat of Name * string * PlayerInfo
-    | RequestList of AsyncReplyChannel<Map<Name, Lobby>>
-
-type ChatPost = { Author: string; Contents: string; Nonce: int }
-
-type RequestSchema =
-    | GetLobbies of string list
-    | HostLobby of NewLobby
-    | JoinLobby of string
-    | LeaveLobby
-    | KickPlayer of System.Guid
-    | ChatMessage of string
 
 type HostResult =
     | LobbyCreated
     | NameExists
     | NameForbidden
 
-type PeerInfo = { Name: string; Num: int; IP: IPEndPoint }
+type ChatPost = { Author: string; Contents: string; Nonce: int }
 
 type LobbyUpdate =
     | Arrival of Name
@@ -97,3 +98,11 @@ type ResponseSchema =
     | HostResult of HostResult
     | Chatter of ChatPost
     | LobbyUpdate of LobbyUpdate
+
+type RequestSchema =
+    | GetLobbies of string list
+    | HostLobby of NewLobby
+    | JoinLobby of string
+    | LeaveLobby
+    | KickPlayer of System.Guid
+    | ChatMessage of string
