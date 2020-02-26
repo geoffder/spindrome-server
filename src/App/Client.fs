@@ -19,10 +19,19 @@ let getLocalIP () =
 
 let openSocket uri = new WebSocket (uri)
 
+let socketReceive (m: MessageEventArgs) =
+    try
+        m.Data
+        |> JsonConvert.DeserializeObject<ResponseSchema>
+        |> printfn "%A"
+    with
+        _ -> printfn "Failed to deserialize:\n%A" m.Data
+
 let login uri name =
     let ws = sprintf "%s/%s" uri name |> openSocket
     ws.Connect ()
-    ws.OnMessage.Add (fun m -> printfn "%A" m.Data)
+    //ws.OnMessage.Add (fun m -> printfn "%A" m.Data)
+    ws.OnMessage.Add socketReceive
     ws
 
 let createLobby (ws: WebSocket) name mode time score cap =

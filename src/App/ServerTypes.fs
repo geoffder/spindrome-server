@@ -79,12 +79,13 @@ type JoinResult =
     | LobbyJoined
     | NoSpace
     | NoSuchLobby
-    | AlreadyInLobby
+    | AlreadyInLobby of string
 
 type HostResult =
     | LobbyCreated
     | NameExists
     | NameForbidden
+    | MustLeaveLobby of string
 
 type ChatPost = { Author: string; Contents: string; Nonce: int }
 
@@ -93,12 +94,15 @@ type LobbyUpdate =
     | Departure of Name
     | ChangedParams of LobbyParams
     | PeerInfo of PeerInfo list
+    | KickedByHost
+    | LobbyClosed
 
 type ResponseSchema =
     | JoinResult of JoinResult
     | HostResult of HostResult
     | Chatter of ChatPost
     | LobbyUpdate of LobbyUpdate
+    | LobbyList of LobbyInfo list
 
 type RequestSchema =
     | GetLobbies of string list

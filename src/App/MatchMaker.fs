@@ -47,7 +47,7 @@ let dropPlayer player lobby =
     match List.except [player] lobby.Players with
     | [] -> None
     | ps ->
-        do Departure player.Name |> broadcastObj (getAgents ps)
+        do Departure player.Name |> LobbyUpdate |> broadcastObj (getAgents ps)
         Some { lobby with Players = ps }
 
 let exitLobby player lobby =
@@ -55,7 +55,7 @@ let exitLobby player lobby =
         do player.Agent.Post <| UpdateLobby Exit
         dropPlayer player lobby
     else
-        do getAgents lobby.Players
+        do getAgents (List.except [player] lobby.Players)
         |> List.iter (fun a -> a.Post <| UpdateLobby Closed)
         None
 
@@ -75,7 +75,8 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
         | Join (player, channel) ->
             if l.Players.Length < l.Params.Capacity then
                 do channel.Reply <| Some { Name = l.Name; LobbyAgent = inbox }
-                do broadcastObj (getAgents l.Players) (Arrival player.Name)
+                do LobbyUpdate (Arrival player.Name)
+                |> broadcastObj (getAgents l.Players)
                 return! loop { l with Players = player :: l.Players }
             else
                 do channel.Reply None
@@ -145,22 +146,28 @@ let lobbyManager = MailboxProcessor.Start(fun inbox ->
 let forbidden = Set.ofList [ "the n-word (hard R)" ]
 
 let createLobby (specs: NewLobby) host =
-    if not <| Set.contains specs.Name forbidden then
-        newLobby specs host
-        |> fun lobby chan -> Create (lobby, chan)
-        |> lobbyManager.PostAndReply
-        |> function
-           | Some l ->
-               do host.Agent.Post <| UpdateLobby (Joined l)
-               LobbyCreated
-           | None -> NameExists
-    else NameForbidden
+    match host.Agent.PostAndReply CurrentLobby with
+    | Some l -> MustLeaveLobby l.Name
+    | None ->
+        if not <| Set.contains specs.Name forbidden then
+            newLobby specs host
+            |> fun lobby chan -> Create (lobby, chan)
+            |> lobbyManager.PostAndReply
+            |> function
+               | Some l ->
+                   do host.Agent.Post <| UpdateLobby (Joined l)
+                   LobbyCreated
+               | None -> NameExists
+        else NameForbidden
+    |> HostResult
     |> sendObj host.Agent
 
 let joinLobby name player =
     let joinMsg chan = Join (player, chan)
     let tryJoin l = l.LobbyAgent.TryPostAndReply (joinMsg, ?timeout = Some 1000)
-    if (player.Agent.PostAndReply CurrentLobby) = None then
+    match player.Agent.PostAndReply CurrentLobby with
+    | Some l -> AlreadyInLobby l.Name
+    | None ->
         fun chan -> LookupLobby (name, chan)
         |> lobbyManager.PostAndReply
         |> Option.bind tryJoin
@@ -170,7 +177,7 @@ let joinLobby name player =
                LobbyJoined
            | Some None -> NoSpace
            | None -> NoSuchLobby
-    else AlreadyInLobby
+    |> JoinResult
     |> sendObj player.Agent
 
 let leaveLobby player =
@@ -199,9 +206,14 @@ let getLobbies strs (wsAgent: MailboxProcessor<SocketMessage>) =
     RequestList
     |> lobbyManager.PostAndReply
     |> List.filter (applyFiltersToList filters)
+    |> LobbyList
     |> sendObj wsAgent
 
 let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
+    let wsSendObj =
+        JsonConvert.SerializeObject
+        >> strToBytes
+        >> (fun data -> ws.send Text data true)
     let rec loop state = async {
         match! inbox.Receive() with
         | CurrentLobby chan ->
@@ -211,10 +223,10 @@ let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
             match change with
             | Joined lobby -> return! loop { state with Location = Some lobby }
             | Kicked ->
-                let! _ = ws.send Text (strToBytes "Kicked!") true
+                let! _ = wsSendObj (LobbyUpdate KickedByHost)
                 return! loop { state with Location = None }
             | Closed ->
-                let! _ = ws.send Text (strToBytes "Lobby Closed!") true
+                let! _ = wsSendObj (LobbyUpdate LobbyClosed)
                 return! loop { state with Location = None }
             | Exit -> return! loop { state with Location = None }
         | Send (op, data, fin) ->
