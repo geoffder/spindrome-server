@@ -9,10 +9,7 @@ open System.Net.Sockets
 
 let sendObj (ws: WebSocket) = JsonConvert.SerializeObject >> ws.Send
 
-// TODO: I'm an idiot, I will get the address off of the websocket
-// on the server. Just get rid of this (which on testing is just giving a
-// local IP [of course])
-let getIP () =
+let getLocalIP () =
     use s = new Socket(AddressFamily.InterNetwork,
                        SocketType.Dgram,
                        ProtocolType.Udp)
@@ -23,7 +20,7 @@ let getIP () =
 let openSocket uri = new WebSocket (uri)
 
 let login uri name =
-    let ws = sprintf "%s/%s/%s/3074" uri name (getIP ()) |> openSocket
+    let ws = sprintf "%s/%s" uri name |> openSocket
     ws.Connect ()
     ws.OnMessage.Add (fun m -> printfn "%A" m.Data)
     ws
