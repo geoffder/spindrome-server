@@ -71,7 +71,7 @@ type ManagerMessage =
     | DelistLobby of Name
     | RelistLobby of LobbyRef
     | LookupLobby of Name * AsyncReplyChannel<LobbyRef option>
-    | RequestList of AsyncReplyChannel<LobbyInfo list>
+    | RequestList of AsyncReplyChannel<Map<Name, LobbyRef>>
 
 type PeerInfo = { Name: string; Num: int; IP: IPEndPoint }
 
@@ -90,7 +90,7 @@ type HostResult =
 type ChatPost = { Author: string; Contents: string; Nonce: int }
 
 type LobbyUpdate =
-    | Arrival of Name
+    | Arrival of Name * System.Guid
     | Departure of Name
     | ChangedParams of LobbyParams
     | PeerInfo of PeerInfo list
