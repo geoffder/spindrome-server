@@ -5,17 +5,11 @@ open Suave.WebSocket
 open System.Net
 
 type Name = string
-type Cap = int
 type Agent<'T> = MailboxProcessor<'T>
 
 type GameMode =
     | LastMan
     | BoostBall
-    static member FromString str =
-        match str with
-        | "last_man" -> LastMan
-        | "boost_ball" -> BoostBall
-        | _ -> LastMan
 
 type Limits = { Time: int; Score: int }
 
@@ -29,6 +23,10 @@ type LobbyInfo =
       Params: LobbyParams
       HostName: string
       Population: int }
+
+type LobbyFilter =
+    | GameMode of GameMode
+    | Capacity of int list
 
 type LobbyMessage =
     | Join of PlayerInfo * AsyncReplyChannel<LobbyRef option>
@@ -105,7 +103,7 @@ type ResponseSchema =
     | LobbyList of LobbyInfo list
 
 type RequestSchema =
-    | GetLobbies of string list
+    | GetLobbies of LobbyFilter list
     | HostLobby of NewLobby
     | JoinLobby of string
     | LeaveLobby

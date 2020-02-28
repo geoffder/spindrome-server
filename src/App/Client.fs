@@ -35,7 +35,7 @@ let login uri name =
 
 let createLobby (ws: WebSocket) name mode time score cap =
     { Name = name
-      Params = { Mode = GameMode.FromString mode
+      Params = { Mode = mode
                  Limits = { Time = time; Score = score }
                  Capacity = cap } }
     |> HostLobby

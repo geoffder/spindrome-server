@@ -5,8 +5,9 @@
 #load "ServerTypes.fs"
 #load "Client.fs"
 
+open GameServer
 open Client
 
 let ws = login "ws://localhost:8080/websocket" "Steve"
-do createLobby ws "foo" "last_man" 10 10 4
+do createLobby ws "foo" LastMan 10 10 4
 ws.Close()
