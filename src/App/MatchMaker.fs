@@ -11,15 +11,15 @@ open System.Net
 let strToBytes (str: string) =
     str |> System.Text.Encoding.ASCII.GetBytes |> ByteSegment
 
-let sendString (agent: MailboxProcessor<SocketMessage>) =
+let sendString (agent: Agent<SocketMessage>) =
     let msg data = Send (Text, data, true)
     strToBytes >> msg >> agent.Post
 
-let sendObj (agent: MailboxProcessor<SocketMessage>) =
+let sendObj (agent: Agent<SocketMessage>) =
     JsonConvert.SerializeObject >> sendString agent
 
 let broadcast agents str =
-    let send (a: MailboxProcessor<SocketMessage>) =
+    let send (a: Agent<SocketMessage>) =
         a.Post <| Send (Text, strToBytes str, true)
     List.iter send agents
 
@@ -60,12 +60,6 @@ let exitLobby player lobby =
 let kickPlayer player lobby =
     do player.Agent.Post <| UpdateLobby Kicked
     dropPlayer player lobby
-
-let applyFiltersToList filters ele =
-    let rec apply = function
-        | f :: t -> if f ele then apply t else false
-        | [] -> true
-    apply filters
 
 let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
     let rec loop l = async {
@@ -109,7 +103,7 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
     loop initial
 )
 
-let lobbyManager = MailboxProcessor.Start(fun inbox ->
+let lobbyManager = Agent.Start(fun inbox ->
     let rec loop (lobbies: Map<string, LobbyRef>) = async {
         match! inbox.Receive() with
         | Create (lobby, channel) ->
@@ -185,35 +179,30 @@ let postChat msg player =
     | Some l -> Chat (msg, player) |> l.LobbyAgent.Post
     | None -> ()
 
-// TODO: Create a union of valid filters, won't need to use strings and
-// the collect pattern.
-let getLobbyFilter str : (LobbyInfo -> LobbyInfo option) list =
-    match str with
-    | "last_man" ->
-        [ fun l -> if l.Params.Mode = LastMan then Some l else None ]
-    | "boost_ball" ->
-        [ fun l -> if l.Params.Mode = BoostBall then Some l else None ]
-    | _ -> []
+let createChooser f : (LobbyInfo -> LobbyInfo option) =
+    match f with
+    | GameMode m ->
+        fun l -> if l.Params.Mode = m then Some l else None
+    | Capacity cs ->
+        fun l -> if List.contains l.Params.Capacity cs then Some l else None
 
 let tryGetLobbyInfo l =
     l.LobbyAgent.TryPostAndReply (GetInfo, ?timeout = Some 1000)
     |> function | Some info -> info | None -> None
 
-let getLobbies strs (wsAgent: MailboxProcessor<SocketMessage>) =
-    let filters =
-        List.collect getLobbyFilter strs
-        |> function
-           | [] -> Some
-           | fs -> List.reduce (fun f1 f2 -> f1 >> Option.bind f2) fs
-    let fetchLobby = tryGetLobbyInfo >> Option.bind filters
+let getLobbies fs (wsAgent: Agent<SocketMessage>) =
+    let sieve = function
+        | [] -> Some
+        | fs -> List.map createChooser fs
+                |> List.reduce (fun f1 f2 -> f1 >> Option.bind f2)
     RequestList
     |> lobbyManager.PostAndReply
     |> Map.toList
-    |> List.choose (fun (_, l) -> fetchLobby l)
+    |> List.choose (fun (_, l) -> tryGetLobbyInfo l |> Option.bind (sieve fs))
     |> LobbyList
     |> sendObj wsAgent
 
-let socketAgent (ws: WebSocket) = MailboxProcessor.Start(fun inbox ->
+let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
     let wsSendObj =
         JsonConvert.SerializeObject
         >> strToBytes
@@ -252,11 +241,6 @@ let playerSocket name ws (ctx: HttpContext) =
           IP = IPEndPoint (ctx.clientIpTrustProxy, 3047)
           Agent = agent }
 
-    let cleanBreak () = do
-        leaveLobby info
-        agent.Post Shut
-        printfn "%s Disconnected" name
-
     let rec loop () = socket {
         match! ws.read() with
         | (Text, data, true) ->
@@ -271,14 +255,17 @@ let playerSocket name ws (ctx: HttpContext) =
                | KickPlayer id -> kickFromLobby id info
                | ChatMessage msg -> postChat msg info
             return! loop ()
-        | (Close, _, _) -> return cleanBreak ()
+        | (Close, _, _) -> return ()
         | _ -> return! loop ()
     }
 
     socket {
         do printfn "%s Connected!" name
         try do! loop ()
-        finally do cleanBreak ()
+        finally do
+            leaveLobby info
+            agent.Post Shut
+            printfn "%s Disconnected" name
     }
 
 let connectToPlayer name = fun ctx ->
