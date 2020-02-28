@@ -30,7 +30,6 @@ let socketReceive (m: MessageEventArgs) =
 let login uri name =
     let ws = sprintf "%s/%s" uri name |> openSocket
     ws.Connect ()
-    //ws.OnMessage.Add (fun m -> printfn "%A" m.Data)
     ws.OnMessage.Add socketReceive
     ws
 
@@ -48,6 +47,9 @@ let drop (ws: WebSocket) = LeaveLobby |> sendObj ws
 
 let join (ws: WebSocket) name = JoinLobby name |> sendObj ws
 
-let kick (ws: WebSocket) name = KickPlayer name |> sendObj ws
+let kick (ws: WebSocket) (id: string) =
+    KickPlayer (System.Guid.Parse id) |> sendObj ws
 
 let getLobbies (ws: WebSocket) filters = GetLobbies filters |> sendObj ws
+
+let close (ws: WebSocket) = ws.Close ()
