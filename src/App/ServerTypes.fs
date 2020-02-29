@@ -24,9 +24,15 @@ type LobbyInfo =
       HostName: string
       Population: int }
 
+type ComparisonOp = EQ | NE | LT | GT | LE | GE
+
+type Comparison<'T> = ComparisonOp * 'T
+
 type LobbyFilter =
     | GameMode of GameMode
     | Capacity of int list
+    | TimeLimit of Comparison<int>
+    | ScoreLimit of Comparison<int>
 
 type LobbyMessage =
     | Join of PlayerInfo * AsyncReplyChannel<LobbyRef option>
