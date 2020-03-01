@@ -186,8 +186,8 @@ let createChooser filter : (LobbyInfo -> LobbyInfo option) =
     match filter with
     | GameMode m ->
         fun l -> if l.Params.Mode = m then Some l else None
-    | Capacity cs ->
-        fun l -> if List.contains l.Params.Capacity cs then Some l else None
+    | Capacity (op, i) ->
+        fun l -> if (getCompare op) l.Params.Capacity i then Some l else None
     | TimeLimit (op, i) ->
         fun l -> if (getCompare op) l.Params.Limits.Time i then Some l else None
     | ScoreLimit (op, i) ->

@@ -30,7 +30,7 @@ type Comparison<'T> = ComparisonOp * 'T
 
 type LobbyFilter =
     | GameMode of GameMode
-    | Capacity of int list
+    | Capacity of Comparison<int>
     | TimeLimit of Comparison<int>
     | ScoreLimit of Comparison<int>
 
