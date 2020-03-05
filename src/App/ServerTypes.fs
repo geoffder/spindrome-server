@@ -38,6 +38,8 @@ type LobbyMessage =
     | Join of PlayerInfo * AsyncReplyChannel<LobbyRef option>
     | Leave of PlayerInfo
     | Kick of System.Guid * PlayerInfo
+    | GateKeep of PlayerInfo
+    | LetThemIn of PlayerInfo
     | Chat of string * PlayerInfo
     | GetInfo of AsyncReplyChannel<LobbyInfo option>
 
@@ -61,7 +63,10 @@ and SocketMessage =
     | Send of Opcode * ByteSegment * bool
     | Shut
 
-type PlayerState = { Location: LobbyRef option }
+type PlayerState =
+    { Location: LobbyRef option
+      Ready: bool
+      Connected: bool }
 
 type Lobby =
     { Name: string

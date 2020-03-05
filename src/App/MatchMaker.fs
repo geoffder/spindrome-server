@@ -89,6 +89,15 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
                        | Some lob -> loop lob
                        | None -> loop l
             else return! loop l
+        | GateKeep host ->
+            if l.Host.ID = host.ID then do man.Post <| DelistLobby l.Name
+            else do ()
+            return! loop l
+        | LetThemIn host ->
+            if l.Host.ID = host.ID
+            then do man.Post <| RelistLobby { Name = l.Name; LobbyAgent = inbox }
+            else do ()
+            return! loop l
         | Chat (msg, player) ->
             do { Author = player.Name; Contents = msg; Nonce = l.ChatNonce }
             |> Chatter
@@ -128,6 +137,9 @@ let lobbyManager = Agent.Start(fun inbox ->
     loop (Map<string, LobbyRef> [])
 )
 
+// TODO: Actually look for forbidden words within the prospective name, rather
+// than this stand-in where I check whether the entire name in the forbidden set
+// (want to catch forbidden words anywhere in the name.) Regex?
 let forbidden = Set.ofList [ "the n-word (hard R)" ]
 
 let createLobby (specs: NewLobby) host =
@@ -201,7 +213,7 @@ let getLobbies fs (wsAgent: Agent<SocketMessage>) =
     let sieve = function
         | [] -> Some
         | fs -> List.map createChooser fs
-                |> List.reduce (fun f1 f2 -> f1 >> Option.bind f2)
+                |> List.reduce (fun f g -> f >> Option.bind g)
     RequestList
     |> lobbyManager.PostAndReply
     |> Map.toList
@@ -236,7 +248,7 @@ let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
             let! _ = ws.send Close (ByteSegment [||]) true
             return ()
     }
-    loop { Location = None }
+    loop { Location = None; Ready = false; Connected = false }
 )
 
 let playerSocket name ws (ctx: HttpContext) =
