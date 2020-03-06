@@ -26,40 +26,56 @@ let broadcast agents str =
 let broadcastObj agents =
     JsonConvert.SerializeObject >> broadcast agents
 
-let getAgents players = List.map (fun p -> p.Agent) players
+let getAgents players = List.map (fun p -> p.Info.Agent) players
 
 let newLobby (l: NewLobby) host =
+    let h = { Info = host; Ready = false; Connected = false }
     { Name = l.Name
       Params = l.Params
       ChatNonce = 0
-      Host = host
-      Players = [host] }
+      Host = h
+      Players = [h] }
 
 let getLobbyInfo (l: Lobby) =
     { Name = l.Name
       Params = l.Params
-      HostName = l.Host.Name
+      HostName = l.Host.Info.Name
       Population = l.Players.Length }
 
 let dropPlayer player lobby =
-    match List.except [player] lobby.Players with
-    | [] -> None
-    | ps ->
-        do Departure player.Name |> LobbyUpdate |> broadcastObj (getAgents ps)
-        Some { lobby with Players = ps }
+    lobby.Players
+    |> List.filter (fun p -> p.Info <> player)
+    |> function
+       | [] -> None
+       | ps ->
+           do Departure player.Name
+           |> LobbyUpdate |> broadcastObj (getAgents ps)
+           Some { lobby with Players = ps }
 
 let exitLobby player lobby =
-    if player <> lobby.Host then
+    if player <> lobby.Host.Info then
         do player.Agent.Post <| UpdateLobby Exit
         dropPlayer player lobby
     else
-        do getAgents (List.except [player] lobby.Players)
+        do lobby.Players
+        |> List.filter (fun p -> p.Info <> player)
+        |> getAgents
         |> List.iter (fun a -> a.Post <| UpdateLobby Closed)
         None
 
 let kickPlayer player lobby =
     do player.Agent.Post <| UpdateLobby Kicked
     dropPlayer player lobby
+
+let setReady readyer players =
+    let ready p =
+        if p.Info.ID = readyer.ID then { p with Ready = true } else p
+    List.map ready players
+
+let setConnected connector players =
+    let connect p =
+        if p.Info.ID = connector.ID then { p with Connected = true } else p
+    List.map connect players
 
 let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
     let rec loop l = async {
@@ -69,7 +85,10 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
                 do channel.Reply <| Some { Name = l.Name; LobbyAgent = inbox }
                 do LobbyUpdate <| Arrival (player.Name, player.ID)
                 |> broadcastObj (getAgents l.Players)
-                return! loop { l with Players = player :: l.Players }
+                return!
+                    { Info = player; Ready = false; Connected = false }
+                    |> fun p -> { l with Players = p :: l.Players }
+                    |> loop
             else
                 do channel.Reply None
                 return! loop l
@@ -80,21 +99,21 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
                 do man.Post <| DelistLobby l.Name
                 return ()  // Say Goodnight.
         | Kick (id, host) ->
-            if l.Host.ID = host.ID then
+            if l.Host.Info.ID = host.ID then
                 return!
                     l.Players
-                    |> List.tryFind (fun i -> i.ID = id)
-                    |> Option.bind (fun p -> kickPlayer p l)
+                    |> List.tryFind (fun i -> i.Info.ID = id)
+                    |> Option.bind (fun p -> kickPlayer p.Info l)
                     |> function
                        | Some lob -> loop lob
                        | None -> loop l
             else return! loop l
         | GateKeep host ->
-            if l.Host.ID = host.ID then do man.Post <| DelistLobby l.Name
+            if l.Host.Info.ID = host.ID then do man.Post <| DelistLobby l.Name
             else do ()
             return! loop l
         | LetThemIn host ->
-            if l.Host.ID = host.ID
+            if l.Host.Info.ID = host.ID
             then do man.Post <| RelistLobby { Name = l.Name; LobbyAgent = inbox }
             else do ()
             return! loop l
@@ -103,6 +122,10 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
             |> Chatter
             |> broadcastObj (getAgents l.Players)
             return! loop { l with ChatNonce = l.ChatNonce + 1 }
+        | PlayerReady p ->
+            return! loop { l with Players = setReady p l.Players }
+        | PlayerConnected p ->
+            return! loop { l with Players = setConnected p l.Players }
         | GetInfo channel ->
             if l.Players.Length < l.Params.Capacity
             then do channel.Reply <| Some (getLobbyInfo l)
@@ -176,20 +199,20 @@ let joinLobby name player =
     |> JoinResult
     |> sendObj player.Agent
 
-let leaveLobby player =
+let messageLobby msg player =
     match player.Agent.PostAndReply CurrentLobby with
-    | Some l -> Leave player |> l.LobbyAgent.Post
+    | Some l -> msg |> l.LobbyAgent.Post
     | None -> ()
 
-let kickFromLobby kickID player =
-    match player.Agent.PostAndReply CurrentLobby with
-    | Some l -> Kick (kickID, player) |> l.LobbyAgent.Post
-    | None -> ()
+let leaveLobby p = messageLobby (Leave p) p
 
-let postChat msg player =
-    match player.Agent.PostAndReply CurrentLobby with
-    | Some l -> Chat (msg, player) |> l.LobbyAgent.Post
-    | None -> ()
+let playerReadied p = messageLobby (PlayerReady p) p
+
+let playerConnected p = messageLobby (PlayerConnected p) p
+
+let kickFromLobby id host = messageLobby (Kick (id, host)) host
+
+let postChat post p = messageLobby (Chat (post, p)) p
 
 let getCompare = function
     | EQ -> (=) | NE -> (<>) | LT -> (<) | GT -> (>) | LE -> (<=) | GE -> (>=)
@@ -248,7 +271,7 @@ let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
             let! _ = ws.send Close (ByteSegment [||]) true
             return ()
     }
-    loop { Location = None; Ready = false; Connected = false }
+    loop { Location = None }
 )
 
 let playerSocket name ws (ctx: HttpContext) =
@@ -271,6 +294,8 @@ let playerSocket name ws (ctx: HttpContext) =
                | HostLobby specs -> createLobby specs info
                | JoinLobby name -> joinLobby name info
                | LeaveLobby -> leaveLobby info
+               | ReadyUp -> playerReadied info
+               | PeersPonged -> playerConnected info
                | KickPlayer id -> kickFromLobby id info
                | ChatMessage msg -> postChat msg info
             return! loop ()
@@ -284,7 +309,7 @@ let playerSocket name ws (ctx: HttpContext) =
         finally do
             leaveLobby info
             agent.Post Shut
-            printfn "%s Disconnected" name
+            printfn "%s Disconnected!" name
     }
 
 let connectToPlayer name = fun ctx ->

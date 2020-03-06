@@ -41,6 +41,8 @@ type LobbyMessage =
     | GateKeep of PlayerInfo
     | LetThemIn of PlayerInfo
     | Chat of string * PlayerInfo
+    | PlayerReady of PlayerInfo
+    | PlayerConnected of PlayerInfo
     | GetInfo of AsyncReplyChannel<LobbyInfo option>
 
 and LobbyRef = { Name: string; LobbyAgent: Agent<LobbyMessage> }
@@ -63,17 +65,16 @@ and SocketMessage =
     | Send of Opcode * ByteSegment * bool
     | Shut
 
-type PlayerState =
-    { Location: LobbyRef option
-      Ready: bool
-      Connected: bool }
+type PlayerState = { Location: LobbyRef option }
+
+type Player = { Info: PlayerInfo; Ready: bool; Connected: bool }
 
 type Lobby =
     { Name: string
       Params: LobbyParams
       ChatNonce: int
-      Host: PlayerInfo
-      Players: PlayerInfo list }
+      Host: Player
+      Players: Player list }
 
 type ManagerMessage =
     | Create of Lobby * AsyncReplyChannel<LobbyRef option>
@@ -118,5 +119,7 @@ type RequestSchema =
     | HostLobby of NewLobby
     | JoinLobby of string
     | LeaveLobby
+    | ReadyUp
+    | PeersPonged
     | KickPlayer of System.Guid
     | ChatMessage of string
