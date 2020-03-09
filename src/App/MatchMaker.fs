@@ -58,7 +58,6 @@ let exitLobby player lobby =
         dropPlayer player lobby
     else
         do lobby.Players
-        |> List.filter (fun p -> p.Info <> player)
         |> getAgents
         |> List.iter (fun a -> a.Post <| UpdateLobby Closed)
         None
