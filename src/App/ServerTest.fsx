@@ -1,5 +1,5 @@
 #r "/home/geoff/.nuget/packages/suave/2.5.6/lib/netstandard2.0/Suave.dll"
-#r "/home/geoff/.nuget/packages/websocketsharp/1.0.3-rc11/lib/websocket-sharp.dll"
+#r "/home/geoff/.nuget/packages/websocketsharp.standard/1.0.3/lib/netstandard2.0/websocket-sharp-standard.dll"
 #r "/home/geoff/.nuget/packages/newtonsoft.json/12.0.3/lib/netstandard2.0/Newtonsoft.Json.dll"
 
 #load "ServerTypes.fs"
