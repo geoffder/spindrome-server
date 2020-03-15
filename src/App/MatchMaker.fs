@@ -124,6 +124,11 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
         | PlayerReady p ->
             return! loop { l with Players = setReady p l.Players }
         | PlayerConnected p ->
+            // TODO: Add "timeout" message from player (payload being list
+            // of players that did not pong back). Also, create a function that
+            // sends a message to the lobby at a delay in case no responses?
+            // Could have the players handle that with their ping/pong logic
+            // though right?
             return! loop { l with Players = setConnected p l.Players }
         | GetInfo channel ->
             if l.Players.Length < l.Params.Capacity
@@ -232,14 +237,13 @@ let tryGetLobbyInfo l =
     |> function | Some info -> info | None -> None
 
 let getLobbies fs (wsAgent: Agent<SocketMessage>) =
-    let sieve = function
-        | [] -> Some
-        | fs -> List.map createChooser fs
-                |> List.reduce (fun f g -> f >> Option.bind g)
+    let sieve =
+        List.map createChooser fs
+        |> List.fold (fun f g -> f >> Option.bind g) Some
     RequestList
     |> lobbyManager.PostAndReply
     |> Map.toList
-    |> List.choose (fun (_, l) -> tryGetLobbyInfo l |> Option.bind (sieve fs))
+    |> List.choose (fun (_, l) -> tryGetLobbyInfo l |> Option.bind sieve)
     |> LobbyList
     |> sendObj wsAgent
 
@@ -285,9 +289,11 @@ let playerSocket name ws (ctx: HttpContext) =
     let rec loop () = socket {
         match! ws.read() with
         | (Text, data, true) ->
-            data
-            |> UTF8.toString
-            |> JsonConvert.DeserializeObject<RequestSchema>
+            try
+                data
+                |> UTF8.toString
+                |> JsonConvert.DeserializeObject<RequestSchema>
+            with _ -> NonConformant
             |> function
                | GetLobbies filters -> getLobbies filters info.Agent
                | HostLobby specs -> createLobby specs info
@@ -297,6 +303,7 @@ let playerSocket name ws (ctx: HttpContext) =
                | PeersPonged -> playerConnected info
                | KickPlayer id -> kickFromLobby id info
                | ChatMessage msg -> postChat msg info
+               | NonConformant -> sendObj info.Agent BadRequest
             return! loop ()
         | (Close, _, _) -> return ()
         | _ -> return! loop ()

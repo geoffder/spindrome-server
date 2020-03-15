@@ -113,6 +113,7 @@ type ResponseSchema =
     | Chatter of ChatPost
     | LobbyUpdate of LobbyUpdate
     | LobbyList of LobbyInfo list
+    | BadRequest
 
 type RequestSchema =
     | GetLobbies of LobbyFilter list
@@ -123,3 +124,4 @@ type RequestSchema =
     | PeersPonged
     | KickPlayer of System.Guid
     | ChatMessage of string
+    | NonConformant
