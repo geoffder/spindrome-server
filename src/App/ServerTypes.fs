@@ -125,3 +125,11 @@ type RequestSchema =
     | KickPlayer of System.Guid
     | ChatMessage of string
     | NonConformant
+
+// Toying around with the idea...
+[<AutoOpen>]
+module Operators =
+    let inline (<--) (a: Agent<'T>) msg = a.Post msg
+    let inline (<->) (a: Agent<'T>) msg = a.PostAndReply msg
+    let inline (<-?->) (a: Agent<'T>) msg = a.TryPostAndReply msg
+    let inline (<=<) (chan: AsyncReplyChannel<'T>) msg = chan.Reply msg
