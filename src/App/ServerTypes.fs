@@ -1,5 +1,6 @@
 namespace GameServer
 
+open Newtonsoft.Json
 open Suave.Sockets
 open Suave.WebSocket
 open System.Net
@@ -128,8 +129,34 @@ type RequestSchema =
 
 // Toying around with the idea...
 [<AutoOpen>]
-module Operators =
+module AgentOperators =
     let inline (<--) (a: Agent<'T>) msg = a.Post msg
     let inline (<->) (a: Agent<'T>) msg = a.PostAndReply msg
-    let inline (<-?->) (a: Agent<'T>) msg = a.TryPostAndReply msg
+    let inline (<-?->) (a: Agent<'T>) (msg, ms) =
+        a.TryPostAndReply (msg, ?timeout = Some ms)
     let inline (<=<) (chan: AsyncReplyChannel<'T>) msg = chan.Reply msg
+
+[<AutoOpen>]
+module AgentHelpers =
+    let inline start (agent: Agent<'T> -> Async<unit>) = Agent<'T>.Start agent
+    let inline receive (inbox: Agent<'T>) = inbox.Receive ()
+
+[<AutoOpen>]
+module SocketAgentHelpers =
+    let strToBytes (str: string) =
+        str |> System.Text.Encoding.ASCII.GetBytes |> ByteSegment
+
+    let sendString (agent: Agent<SocketMessage>) =
+        let msg data = Send (Text, data, true)
+        strToBytes >> msg >> agent.Post
+
+    let sendObj (agent: Agent<SocketMessage>) =
+        JsonConvert.SerializeObject >> sendString agent
+
+    let broadcast agents str =
+        let send (a: Agent<SocketMessage>) =
+            a <-- Send (Text, strToBytes str, true)
+        List.iter send agents
+
+    let broadcastObj agents =
+        JsonConvert.SerializeObject >> broadcast agents

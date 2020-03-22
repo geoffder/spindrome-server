@@ -1,10 +1,12 @@
-module LobbyRefactor
+module GameServer.LobbyAgent
 
 // This exists as an alternative, and to help me decide if I think it actually
 // is a more readable/maintainable solution (compared to the lobbyAgent in
 // MatchMaker which I find a bit unwieldly).
 
-open GameServer
+// open GameServer
+
+let getAgents players = List.map (fun p -> p.Info.Agent) players
 
 let getLobbyInfo (l: Lobby) =
     { Name = l.Name
@@ -18,35 +20,38 @@ let dropPlayer player lobby =
     |> function
        | [] -> None
        | ps ->
-           do Departure player.Name
-           |> LobbyUpdate |> broadcastObj (getAgents ps)
+           do
+              Departure player.Name
+              |> LobbyUpdate
+              |> broadcastObj (getAgents ps)
            Some { lobby with Players = ps }
 
 let exitLobby player lobby =
     if player <> lobby.Host.Info then
-        do player.Agent.Post <| UpdateLobby Exit
+        do player.Agent <-- UpdateLobby Exit
         dropPlayer player lobby
     else
-        do lobby.Players
-        |> getAgents
-        |> List.iter (fun a -> a.Post <| UpdateLobby Closed)
+        do
+            lobby.Players
+            |> getAgents
+            |> List.iter (fun a -> a <-- UpdateLobby Closed)
         None
 
 let kickPlayer player lobby =
-    do player.Agent.Post <| UpdateLobby Kicked
+    do player.Agent <-- UpdateLobby Kicked
     dropPlayer player lobby
 
-let setReady readyer players =
+let setReady l readyer =
     let ready p =
         if p.Info.ID = readyer.ID then { p with Ready = true } else p
-    List.map ready players
+    { l with Players = List.map ready l.Players }
 
-let setConnected connector players =
+let setConnected l connector =
     let connect p =
         if p.Info.ID = connector.ID then { p with Connected = true } else p
-    List.map connect players
+    { l with Players = List.map connect l.Players }
 
-let join inbox l (p: PlayerInfo) channel =
+let inline join l inbox (p: PlayerInfo) channel =
     if l.Players.Length < l.Params.Capacity then
         do
             channel <=< Some { Name = l.Name; LobbyAgent = inbox }
@@ -58,7 +63,7 @@ let join inbox l (p: PlayerInfo) channel =
         do channel <=< None
         l
 
-let kick l id kicker =
+let inline kick l id kicker =
     if l.Host.Info.ID = kicker.ID then
        l.Players
        |> List.tryFind (fun i -> i.Info.ID = id)
@@ -68,36 +73,36 @@ let kick l id kicker =
           | Some updated -> updated
     else l
 
-let gateKeep l man host =
+let inline gateKeep l man host =
     do
         if l.Host.Info.ID = host.ID then man <-- DelistLobby l.Name
         else ()
     l
 
-let letThemIn l man inbox host =
+let inline letThemIn l man inbox host =
     do
         if l.Host.Info.ID = host.ID
         then man <-- RelistLobby { Name = l.Name; LobbyAgent = inbox }
         else ()
     l
 
-let chat l msg (player: PlayerInfo) =
+let inline chat l msg (player: PlayerInfo) =
     do
         { Author = player.Name; Contents = msg; Nonce = l.ChatNonce }
         |> Chatter
         |> broadcastObj (getAgents l.Players)
     { l with ChatNonce = l.ChatNonce + 1 }
 
-let getInfo l channel =
+let inline getInfo l channel =
     do
         if l.Players.Length < l.Params.Capacity
         then channel <=< Some (getLobbyInfo l)
         else channel <=< None
     l
 
-let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
+let agent (man: Agent<ManagerMessage>) initial inbox =
     let rec loop l = async {
-        match! inbox.Receive() with
+        match! receive inbox with
         | Join (player, channel) -> return! loop <| join l inbox player channel
         | Leave player ->
             match exitLobby player l with
@@ -109,9 +114,10 @@ let lobbyAgent (man: Agent<ManagerMessage>) initial = Agent.Start(fun inbox ->
         | GateKeep host -> return! loop <| gateKeep l man host
         | LetThemIn host -> return! loop <| letThemIn l man inbox host
         | Chat (msg, player) -> return! loop <| chat l msg player
-        | PlayerReady p -> return! loop { l with Players = setReady p l.Players }
-        | PlayerConnected p -> return! loop { l with Players = setConnected p l.Players }
+        | PlayerReady p -> return! loop <| setReady l p
+        | PlayerConnected p -> return! loop <| setConnected l p
         | GetInfo channel -> return! loop <| getInfo l channel
     }
     loop initial
-)
+
+let spinUp manager initial = start <| agent manager initial
