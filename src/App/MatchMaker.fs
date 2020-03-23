@@ -8,14 +8,6 @@ open Suave.Sockets.Control
 open Suave.WebSocket
 open System.Net
 
-let newLobby (l: NewLobby) host =
-    let h = { Info = host; Ready = false; Connected = false }
-    { Name = l.Name
-      Params = l.Params
-      ChatNonce = 0
-      Host = h
-      Players = [h] }
-
 let lobbyManager = Agent.Start(fun inbox ->
     let rec loop (lobbies: Map<string, LobbyRef>) = async {
         match! receive inbox with
@@ -40,6 +32,15 @@ let lobbyManager = Agent.Start(fun inbox ->
     }
     loop (Map<string, LobbyRef> [])
 )
+
+let newLobby (l: NewLobby) host =
+    let h = { Info = host; Ready = false; Connected = false }
+    { Name = l.Name
+      Params = l.Params
+      ChatNonce = 0
+      Host = h
+      Players = [h]
+      WiringResults = Map.empty }
 
 // TODO: Actually look for forbidden words within the prospective name, rather
 // than this stand-in where I check whether the entire name in the forbidden set
@@ -89,7 +90,7 @@ let leaveLobby p = messageLobby (Leave p) p
 
 let playerReadied p = messageLobby (PlayerReady p) p
 
-let playerConnected p = messageLobby (PlayerConnected p) p
+let wiringReport p fs = messageLobby (WiringReport (p.ID, fs)) p
 
 let kickFromLobby id host = messageLobby (Kick (id, host)) host
 
@@ -177,7 +178,7 @@ let playerSocket name ws (ctx: HttpContext) =
                | JoinLobby name -> joinLobby name info
                | LeaveLobby -> leaveLobby info
                | ReadyUp -> playerReadied info
-               | PeersPonged -> playerConnected info
+               | PeersPonged fails -> wiringReport info fails
                | KickPlayer id -> kickFromLobby id info
                | ChatMessage msg -> postChat msg info
                | NonConformant -> sendObj info.Agent BadRequest

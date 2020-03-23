@@ -41,15 +41,20 @@ let kickPlayer player lobby =
     do player.Agent <-- UpdateLobby Kicked
     dropPlayer player lobby
 
-let setReady l readyer =
-    let ready p =
-        if p.Info.ID = readyer.ID then { p with Ready = true } else p
-    { l with Players = List.map ready l.Players }
-
 let setConnected l connector =
     let connect p =
         if p.Info.ID = connector.ID then { p with Connected = true } else p
     { l with Players = List.map connect l.Players }
+
+let connectAgent parent (l: Lobby) = Agent.Start(fun inbox ->
+    let rec loop fails = async {
+        let! pName, failures = receive inbox
+        match Map.add pName failures fails with
+        | fs when fs.Count < l.Players.Length -> return! loop fs
+        | fs -> return ()  // determine if ready to roll, or kicking required.
+    }
+    loop (Map<string, string list> [])
+)
 
 let inline join l inbox (p: PlayerInfo) channel =
     if l.Players.Length < l.Params.Capacity then
@@ -93,6 +98,22 @@ let inline chat l msg (player: PlayerInfo) =
         |> broadcastObj (getAgents l.Players)
     { l with ChatNonce = l.ChatNonce + 1 }
 
+let inline setReady l readyer =
+    let ready p =
+        if p.Info.ID = readyer.ID then { p with Ready = true } else p
+    { l with Players = List.map ready l.Players }
+
+let inline peerWiring l man id fails =
+    match Map.add id fails l.WiringResults with
+    | fs when fs.Count < l.Players.Length -> { l with WiringResults = fs }
+    | fs ->
+        do
+            // logic goes here.
+            printfn "Go? Or rollback and kick bad apple."
+        { l with WiringResults = Map.empty }
+
+
+
 let inline getInfo l channel =
     do
         if l.Players.Length < l.Params.Capacity
@@ -115,7 +136,7 @@ let agent (man: Agent<ManagerMessage>) initial inbox =
         | LetThemIn host -> return! loop <| letThemIn l man inbox host
         | Chat (msg, player) -> return! loop <| chat l msg player
         | PlayerReady p -> return! loop <| setReady l p
-        | PlayerConnected p -> return! loop <| setConnected l p
+        | WiringReport (id, fs) -> return! loop <| peerWiring l man id fs
         | GetInfo channel -> return! loop <| getInfo l channel
     }
     loop initial

@@ -43,7 +43,7 @@ type LobbyMessage =
     | LetThemIn of PlayerInfo
     | Chat of string * PlayerInfo
     | PlayerReady of PlayerInfo
-    | PlayerConnected of PlayerInfo
+    | WiringReport of System.Guid * System.Guid list
     | GetInfo of AsyncReplyChannel<LobbyInfo option>
 
 and LobbyRef = { Name: string; LobbyAgent: Agent<LobbyMessage> }
@@ -75,7 +75,8 @@ type Lobby =
       Params: LobbyParams
       ChatNonce: int
       Host: Player
-      Players: Player list }
+      Players: Player list
+      WiringResults: Map<System.Guid, System.Guid list> }
 
 type ManagerMessage =
     | Create of Lobby * AsyncReplyChannel<LobbyRef option>
@@ -122,12 +123,11 @@ type RequestSchema =
     | JoinLobby of string
     | LeaveLobby
     | ReadyUp
-    | PeersPonged
+    | PeersPonged of System.Guid list
     | KickPlayer of System.Guid
     | ChatMessage of string
     | NonConformant
 
-// Toying around with the idea...
 [<AutoOpen>]
 module AgentOperators =
     let inline (<--) (a: Agent<'T>) msg = a.Post msg
