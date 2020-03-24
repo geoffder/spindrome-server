@@ -14,23 +14,23 @@ let lobbyManager = Agent.Start(fun inbox ->
         | Create (lobby, channel) ->
             match Map.containsKey lobby.Name lobbies with
             | true ->
-                do channel.Reply None
+                do channel <=< None
                 return! loop lobbies
             | false ->
                 let l = { Name = lobby.Name
                           LobbyAgent = LobbyAgent.spinUp inbox lobby }
-                do channel.Reply <| Some l
+                do channel <=< Some l
                 return! lobbies |> Map.add lobby.Name l |> loop
         | DelistLobby name -> return! lobbies |> Map.remove name |> loop
         | RelistLobby l -> return! lobbies |> Map.add l.Name l |> loop
         | LookupLobby (name, channel) ->
-            do channel.Reply <| Map.tryFind name lobbies
+            do channel <=< Map.tryFind name lobbies
             return! loop lobbies
         | RequestList channel ->
-            do channel.Reply lobbies
+            do channel <=< lobbies
             return! loop lobbies
     }
-    loop (Map<string, LobbyRef> [])
+    loop Map.empty
 )
 
 let newLobby (l: NewLobby) host =
@@ -133,7 +133,7 @@ let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
     let rec loop state = async {
         match! receive inbox with
         | CurrentLobby chan ->
-            do chan.Reply state.Location
+            do chan <=< state.Location
             return! loop state
         | UpdateLobby change ->
             match change with
@@ -156,13 +156,11 @@ let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
 )
 
 let playerSocket name ws (ctx: HttpContext) =
-    let agent = socketAgent ws
-
     let info =
         { Name = name
           ID = System.Guid.NewGuid()
           IP = IPEndPoint (ctx.clientIpTrustProxy, 3047)
-          Agent = agent }
+          Agent = socketAgent ws }
 
     let rec loop () = socket {
         match! ws.read () with
@@ -192,7 +190,7 @@ let playerSocket name ws (ctx: HttpContext) =
         try do! loop ()
         finally do
             leaveLobby info
-            agent <-- Shut
+            info.Agent <-- Shut
             printfn "%s Disconnected!" name
     }
 
