@@ -1,12 +1,14 @@
 module GameServer.LobbyAgent
 
-// This exists as an alternative, and to help me decide if I think it actually
-// is a more readable/maintainable solution (compared to the lobbyAgent in
-// MatchMaker which I find a bit unwieldly).
-
-// open GameServer
+open AgentHelpers
+open AgentOperators
+open SocketAgentHelpers
 
 let getAgents players = List.map (fun p -> p.Info.Agent) players
+
+let getPlayerInfosByIDs ps ids =
+    List.map (fun p -> p.Info) ps
+    |> List.filter (fun info -> List.contains info.ID ids)
 
 let getLobbyInfo (l: Lobby) =
     { Name = l.Name
@@ -14,9 +16,16 @@ let getLobbyInfo (l: Lobby) =
       HostName = l.Host.Info.Name
       Population = l.Players.Length }
 
+let getPeerInfo (p: PlayerInfo) = { Name = p.Name; GUID = p.ID; IP = p.IP }
+
+let refreshLobby l =
+    { l with
+        Players = List.map (fun p -> { p with Ready = false }) l.Players
+        WiringResults = Map.empty }
+
 let dropPlayer player lobby =
     lobby.Players
-    |> List.filter (fun p -> p.Info <> player)
+    |> List.filter (fun p -> p.Info.ID <> player.ID)
     |> function
        | [] -> None
        | ps ->
@@ -41,26 +50,40 @@ let kickPlayer player lobby =
     do player.Agent <-- UpdateLobby Kicked
     dropPlayer player lobby
 
+let prunePeers lobby =
+    let nPeers = (List.length lobby.Players) - 1
+    let tallyer (strikes, toKick) id =
+        if Set.contains id strikes
+        then (strikes, Set.add id toKick)
+        else (Set.add id strikes, toKick)
+    let pruner (strikes, toKick) id fails =
+        match fails with
+        | [] -> (strikes, toKick)
+        | fs when (List.length fs) = nPeers -> (strikes, Set.add id toKick)
+        | fs -> List.fold tallyer (strikes, toKick) fs
+    Map.fold pruner (Set.empty, Set.empty) lobby.WiringResults
+    |> fun (ss, ks) ->
+        Set.difference ss ks
+        |> Set.toList
+        |> List.head  // Arbitrarily add one player with a strike to kick list.
+        |> fun h -> h :: Set.toList ks
+    |> getPlayerInfosByIDs lobby.Players
+    |> function
+       | ps when List.contains lobby.Host.Info ps ->
+           exitLobby lobby.Host.Info lobby
+       | ps ->
+           List.fold (fun l p -> Option.bind (kickPlayer p) l) (Some lobby) ps
+
 let setConnected l connector =
     let connect p =
         if p.Info.ID = connector.ID then { p with Connected = true } else p
     { l with Players = List.map connect l.Players }
 
-let connectAgent parent (l: Lobby) = Agent.Start(fun inbox ->
-    let rec loop fails = async {
-        let! pName, failures = receive inbox
-        match Map.add pName failures fails with
-        | fs when fs.Count < l.Players.Length -> return! loop fs
-        | fs -> return ()  // determine if ready to roll, or kicking required.
-    }
-    loop (Map<string, string list> [])
-)
-
-let inline join l inbox (p: PlayerInfo) channel =
+let inline join l inbox p channel =
     if l.Players.Length < l.Params.Capacity then
         do
             channel <=< Some { Name = l.Name; LobbyAgent = inbox }
-            LobbyUpdate (Arrival (p.Name, p.ID))
+            LobbyUpdate (Arrival (getPeerInfo p))
             |> broadcastObj (getAgents l.Players)
         { Info = p; Ready = false; Connected = false }
         |> fun p -> { l with Players = p :: l.Players }
@@ -68,8 +91,8 @@ let inline join l inbox (p: PlayerInfo) channel =
         do channel <=< None
         l
 
-let inline kick l id kicker =
-    if l.Host.Info.ID = kicker.ID then
+let inline kick l id kickerID =
+    if l.Host.Info.ID = kickerID then
        l.Players
        |> List.tryFind (fun i -> i.Info.ID = id)
        |> Option.bind (fun p -> kickPlayer p.Info l)
@@ -78,41 +101,56 @@ let inline kick l id kicker =
           | Some updated -> updated
     else l
 
-let inline gateKeep l man host =
+let inline gateKeep l man id =
     do
-        if l.Host.Info.ID = host.ID then man <-- DelistLobby l.Name
+        if l.Host.Info.ID = id then man <-- DelistLobby l.Name
         else ()
     l
 
-let inline letThemIn l man inbox host =
+let inline letThemIn l man inbox id =
     do
-        if l.Host.Info.ID = host.ID
+        if l.Host.Info.ID = id
         then man <-- RelistLobby { Name = l.Name; LobbyAgent = inbox }
         else ()
     l
 
-let inline chat l msg (player: PlayerInfo) =
+let inline chat l name msg =
     do
-        { Author = player.Name; Contents = msg; Nonce = l.ChatNonce }
+        { Author = name; Contents = msg; Nonce = l.ChatNonce }
         |> Chatter
         |> broadcastObj (getAgents l.Players)
     { l with ChatNonce = l.ChatNonce + 1 }
 
-let inline setReady l readyer =
+let inline setReady l id =
     let ready p =
-        if p.Info.ID = readyer.ID then { p with Ready = true } else p
+        if p.Info.ID = id then { p with Ready = true } else p
     { l with Players = List.map ready l.Players }
 
-let inline peerWiring l man id fails =
+let inline initiateWiring l man host =
+    // NOTE: If not host, don't do anything. If players aren't ready, let the
+    // host know? Client should be able to do that though. Maybe don't bother
+    // sending a message down the socket...
+    // TODO: delist lobby, tell players to begin ping-pong wiring
+    l
+
+// TODO: Currently no custom messaging about failure condition.
+// Should send messages to clients. Maybe add reason sum type to kick functions?
+let inline peerWiring l box man id fails =
     match Map.add id fails l.WiringResults with
-    | fs when fs.Count < l.Players.Length -> { l with WiringResults = fs }
+    | fs when fs.Count < l.Players.Length -> Some { l with WiringResults = fs }
     | fs ->
-        do
-            // logic goes here.
-            printfn "Go? Or rollback and kick bad apple."
-        { l with WiringResults = Map.empty }
-
-
+        if Map.forall (fun _ l -> List.isEmpty l) fs then
+            do broadcastObj (getAgents l.Players) StartGame
+            Some l
+        else
+            match prunePeers l with
+            | None -> None
+            | someUpdated ->
+                do man <-- RelistLobby { Name = l.Name; LobbyAgent = box }
+                someUpdated
+        |> function
+           | None -> None
+           | Some lobby -> Some (refreshLobby lobby)
 
 let inline getInfo l channel =
     do
@@ -121,6 +159,9 @@ let inline getInfo l channel =
         else channel <=< None
     l
 
+// TODO: Add message that kicks off wiring
+// TODO: Need IP info situation needs to be improved (make this part easy),
+// as enabling clients to be testing ping regularly.
 let agent (man: Agent<ManagerMessage>) initial inbox =
     let rec loop l = async {
         match! receive inbox with
@@ -131,12 +172,16 @@ let agent (man: Agent<ManagerMessage>) initial inbox =
             | None ->
                 do man <-- DelistLobby l.Name
                 return ()  // Say Goodnight.
-        | Kick (id, host) -> return! loop <| kick l id host
-        | GateKeep host -> return! loop <| gateKeep l man host
-        | LetThemIn host -> return! loop <| letThemIn l man inbox host
-        | Chat (msg, player) -> return! loop <| chat l msg player
-        | PlayerReady p -> return! loop <| setReady l p
-        | WiringReport (id, fs) -> return! loop <| peerWiring l man id fs
+        | Kick (id, kickerID) -> return! loop <| kick l id kickerID
+        | GateKeep id -> return! loop <| gateKeep l man id
+        | LetThemIn id -> return! loop <| letThemIn l man inbox id
+        | Chat (name, msg) -> return! loop <| chat l name msg
+        | PlayerReady id -> return! loop <| setReady l id
+        | InitiateWiring host -> return! loop <| initiateWiring l man host
+        | WiringReport (id, fs) ->
+            match peerWiring l inbox man id fs with
+            | Some lob -> return! loop lob
+            | None -> return ()
         | GetInfo channel -> return! loop <| getInfo l channel
     }
     loop initial

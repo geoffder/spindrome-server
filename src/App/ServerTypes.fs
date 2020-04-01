@@ -18,7 +18,6 @@ type LobbyParams = { Mode: GameMode; Limits: Limits; Capacity: int }
 
 type NewLobby = { Name: string; Params: LobbyParams }
 
-// NOTE: Speculative type for sending lobby info to clients.
 type LobbyInfo =
     { Name: string
       Params: LobbyParams
@@ -38,11 +37,12 @@ type LobbyFilter =
 type LobbyMessage =
     | Join of PlayerInfo * AsyncReplyChannel<LobbyRef option>
     | Leave of PlayerInfo
-    | Kick of System.Guid * PlayerInfo
-    | GateKeep of PlayerInfo
-    | LetThemIn of PlayerInfo
-    | Chat of string * PlayerInfo
-    | PlayerReady of PlayerInfo
+    | Kick of System.Guid * System.Guid
+    | GateKeep of System.Guid
+    | LetThemIn of System.Guid
+    | Chat of Name * string
+    | PlayerReady of System.Guid
+    | InitiateWiring of PlayerInfo
     | WiringReport of System.Guid * System.Guid list
     | GetInfo of AsyncReplyChannel<LobbyInfo option>
 
@@ -54,7 +54,7 @@ and LobbyAction =
     | Closed
     | Exit
 
-and  PlayerInfo =
+and PlayerInfo =
     { Name: string
       ID: System.Guid
       IP: IPEndPoint
@@ -85,7 +85,7 @@ type ManagerMessage =
     | LookupLobby of Name * AsyncReplyChannel<LobbyRef option>
     | RequestList of AsyncReplyChannel<Map<Name, LobbyRef>>
 
-type PeerInfo = { Name: string; Num: int; IP: IPEndPoint }
+type PeerInfo = { Name: string; GUID: System.Guid; IP: IPEndPoint }
 
 type JoinResult =
     | LobbyJoined
@@ -102,7 +102,7 @@ type HostResult =
 type ChatPost = { Author: string; Contents: string; Nonce: int }
 
 type LobbyUpdate =
-    | Arrival of Name * System.Guid
+    | Arrival of PeerInfo
     | Departure of Name
     | ChangedParams of LobbyParams
     | PeerInfo of PeerInfo list
@@ -115,6 +115,7 @@ type ResponseSchema =
     | Chatter of ChatPost
     | LobbyUpdate of LobbyUpdate
     | LobbyList of LobbyInfo list
+    | StartGame of LobbyParams
     | BadRequest
 
 type RequestSchema =
@@ -128,21 +129,20 @@ type RequestSchema =
     | ChatMessage of string
     | NonConformant
 
-[<AutoOpen>]
 module AgentOperators =
-    let inline (<--) (a: Agent<'T>) msg = a.Post msg
-    let inline (<->) (a: Agent<'T>) msg = a.PostAndReply msg
-    let inline (<-?->) (a: Agent<'T>) (msg, ms) =
+    let inline ( <-- ) (a: Agent<'T>) msg = a.Post msg
+    let inline ( <-> ) (a: Agent<'T>) msg = a.PostAndReply msg
+    let inline ( <-?-> ) (a: Agent<'T>) (msg, ms) =
         a.TryPostAndReply (msg, ?timeout = Some ms)
-    let inline (<=<) (chan: AsyncReplyChannel<'T>) msg = chan.Reply msg
+    let inline ( <=< ) (chan: AsyncReplyChannel<'T>) msg = chan.Reply msg
 
-[<AutoOpen>]
 module AgentHelpers =
     let inline start (agent: Agent<'T> -> Async<unit>) = Agent<'T>.Start agent
     let inline receive (inbox: Agent<'T>) = inbox.Receive ()
 
-[<AutoOpen>]
 module SocketAgentHelpers =
+    open AgentOperators
+
     let strToBytes (str: string) =
         str |> System.Text.Encoding.ASCII.GetBytes |> ByteSegment
 

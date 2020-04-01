@@ -8,6 +8,10 @@ open Suave.Sockets.Control
 open Suave.WebSocket
 open System.Net
 
+open AgentHelpers
+open AgentOperators
+open SocketAgentHelpers
+
 let lobbyManager = Agent.Start(fun inbox ->
     let rec loop (lobbies: Map<string, LobbyRef>) = async {
         match! receive inbox with
@@ -81,20 +85,20 @@ let joinLobby name player =
     |> JoinResult
     |> sendObj player.Agent
 
-let messageLobby msg player =
-    match player.Agent <-> CurrentLobby with
+let messageLobby msg playerAgent =
+    match playerAgent <-> CurrentLobby with
     | Some l -> l.LobbyAgent <-- msg
     | None -> ()
 
-let leaveLobby p = messageLobby (Leave p) p
+let leaveLobby p = messageLobby (Leave p) p.Agent
 
-let playerReadied p = messageLobby (PlayerReady p) p
+let playerReadied p = messageLobby (PlayerReady p.ID) p.Agent
 
-let wiringReport p fs = messageLobby (WiringReport (p.ID, fs)) p
+let wiringReport p fs = messageLobby (WiringReport (p.ID, fs)) p.Agent
 
-let kickFromLobby id host = messageLobby (Kick (id, host)) host
+let kickFromLobby id host = messageLobby (Kick (id, host.ID)) host.Agent
 
-let postChat post p = messageLobby (Chat (post, p)) p
+let postChat post (p: PlayerInfo) = messageLobby (Chat (p.Name, post)) p.Agent
 
 let getCompare = function
     | EQ -> (=) | NE -> (<>) | LT -> (<) | GT -> (>) | LE -> (<=) | GE -> (>=)
@@ -199,10 +203,3 @@ let connectToPlayer name = fun ctx ->
 
 let server =
     choose [ pathScan "/websocket/%s" connectToPlayer ]
-
-// let connectToPlayer (name, (addr: string), port) = fun ctx ->
-//     let ip = IPEndPoint (IPAddress.Parse addr, port)
-//     handShake (playerSocket name ip) ctx
-
-// let server =
-//     choose [ pathScan "/websocket/%s/%s/%i" connectToPlayer ]
