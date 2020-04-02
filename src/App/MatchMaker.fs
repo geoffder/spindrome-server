@@ -92,7 +92,7 @@ let messageLobby msg playerAgent =
 
 let leaveLobby p = messageLobby (Leave p) p.Agent
 
-let playerReadied p = messageLobby (PlayerReady p.ID) p.Agent
+let playerReadied p up = messageLobby (PlayerReady (p.ID, up)) p.Agent
 
 let wiringReport p fs = messageLobby (WiringReport (p.ID, fs)) p.Agent
 
@@ -179,7 +179,7 @@ let playerSocket name ws (ctx: HttpContext) =
                | HostLobby specs -> createLobby specs info
                | JoinLobby name -> joinLobby name info
                | LeaveLobby -> leaveLobby info
-               | ReadyUp -> playerReadied info
+               | ReadyUp up -> playerReadied info up
                | PeersPonged fails -> wiringReport info fails
                | KickPlayer id -> kickFromLobby id info
                | ChatMessage msg -> postChat msg info

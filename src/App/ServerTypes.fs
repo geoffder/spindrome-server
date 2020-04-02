@@ -41,7 +41,7 @@ type LobbyMessage =
     | GateKeep of System.Guid
     | LetThemIn of System.Guid
     | Chat of Name * string
-    | PlayerReady of System.Guid
+    | PlayerReady of System.Guid * bool
     | InitiateWiring of PlayerInfo
     | WiringReport of System.Guid * System.Guid list
     | GetInfo of AsyncReplyChannel<LobbyInfo option>
@@ -85,7 +85,7 @@ type ManagerMessage =
     | LookupLobby of Name * AsyncReplyChannel<LobbyRef option>
     | RequestList of AsyncReplyChannel<Map<Name, LobbyRef>>
 
-type PeerInfo = { Name: string; GUID: System.Guid; IP: IPEndPoint }
+type PeerInfo = { Name: string; GUID: System.Guid; IPStr: string }
 
 type JoinResult =
     | LobbyJoined
@@ -105,7 +105,9 @@ type LobbyUpdate =
     | Arrival of PeerInfo
     | Departure of Name
     | ChangedParams of LobbyParams
-    | PeerInfo of PeerInfo list
+    | Readied of System.Guid * bool
+    | PingPongTime of PeerInfo list
+    | GameTime of LobbyParams
     | KickedByHost
     | LobbyClosed
 
@@ -115,15 +117,15 @@ type ResponseSchema =
     | Chatter of ChatPost
     | LobbyUpdate of LobbyUpdate
     | LobbyList of LobbyInfo list
-    | StartGame of LobbyParams
     | BadRequest
 
+// TODO: Add initiating wiring request.
 type RequestSchema =
     | GetLobbies of LobbyFilter list
     | HostLobby of NewLobby
     | JoinLobby of string
     | LeaveLobby
-    | ReadyUp
+    | ReadyUp of bool
     | PeersPonged of System.Guid list
     | KickPlayer of System.Guid
     | ChatMessage of string

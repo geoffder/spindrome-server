@@ -54,7 +54,7 @@ let getLobbies (ws: WebSocket) filters = GetLobbies filters |> sendObj ws
 
 let close (ws: WebSocket) = ws.Close ()
 
-let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
+let socketAgent (_ws: WebSocket) = Agent.Start(fun inbox ->
         let rec loop () = async {
             match! inbox.Receive() with
             | _ -> ()

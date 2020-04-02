@@ -16,7 +16,8 @@ let getLobbyInfo (l: Lobby) =
       HostName = l.Host.Info.Name
       Population = l.Players.Length }
 
-let getPeerInfo (p: PlayerInfo) = { Name = p.Name; GUID = p.ID; IP = p.IP }
+let getPeerInfo (p: PlayerInfo) =
+    { Name = p.Name; GUID = p.ID; IPStr = p.IP.ToString () }
 
 let refreshLobby l =
     { l with
@@ -79,13 +80,14 @@ let setConnected l connector =
         if p.Info.ID = connector.ID then { p with Connected = true } else p
     { l with Players = List.map connect l.Players }
 
-let inline join l inbox p channel =
+let inline join l inbox (player: PlayerInfo) channel =
     if l.Players.Length < l.Params.Capacity then
         do
             channel <=< Some { Name = l.Name; LobbyAgent = inbox }
-            LobbyUpdate (Arrival (getPeerInfo p))
+            Arrival (getPeerInfo player)
+            |> LobbyUpdate
             |> broadcastObj (getAgents l.Players)
-        { Info = p; Ready = false; Connected = false }
+        { Info = player; Ready = false; Connected = false }
         |> fun p -> { l with Players = p :: l.Players }
     else
         do channel <=< None
@@ -121,16 +123,25 @@ let inline chat l name msg =
         |> broadcastObj (getAgents l.Players)
     { l with ChatNonce = l.ChatNonce + 1 }
 
-let inline setReady l id =
+let inline setReady l id up =
     let ready p =
-        if p.Info.ID = id then { p with Ready = true } else p
+        if p.Info.ID = id then { p with Ready = up } else p
+    do Readied (id, up) |> LobbyUpdate |> broadcastObj (getAgents l.Players)
     { l with Players = List.map ready l.Players }
 
 let inline initiateWiring l man host =
-    // NOTE: If not host, don't do anything. If players aren't ready, let the
-    // host know? Client should be able to do that though. Maybe don't bother
-    // sending a message down the socket...
-    // TODO: delist lobby, tell players to begin ping-pong wiring
+    do
+        if l.Host.Info.ID = host.ID
+           && List.length l.Players > 1
+           && List.forall (fun p -> p.Ready) l.Players
+           // && Map.isEmpty l.WiringResults NOTE: Just wipe results instead?
+        then
+            man <-- DelistLobby l.Name
+            List.map (fun p -> getPeerInfo p.Info) l.Players
+            |> PingPongTime
+            |> LobbyUpdate
+            |> broadcastObj (getAgents l.Players)
+        else ()
     l
 
 // TODO: Currently no custom messaging about failure condition.
@@ -140,7 +151,10 @@ let inline peerWiring l box man id fails =
     | fs when fs.Count < l.Players.Length -> Some { l with WiringResults = fs }
     | fs ->
         if Map.forall (fun _ l -> List.isEmpty l) fs then
-            do broadcastObj (getAgents l.Players) StartGame
+            do
+                GameTime l.Params
+                |> LobbyUpdate
+                |> broadcastObj (getAgents l.Players)
             Some l
         else
             match prunePeers l with
@@ -159,9 +173,6 @@ let inline getInfo l channel =
         else channel <=< None
     l
 
-// TODO: Add message that kicks off wiring
-// TODO: Need IP info situation needs to be improved (make this part easy),
-// as enabling clients to be testing ping regularly.
 let agent (man: Agent<ManagerMessage>) initial inbox =
     let rec loop l = async {
         match! receive inbox with
@@ -176,7 +187,7 @@ let agent (man: Agent<ManagerMessage>) initial inbox =
         | GateKeep id -> return! loop <| gateKeep l man id
         | LetThemIn id -> return! loop <| letThemIn l man inbox id
         | Chat (name, msg) -> return! loop <| chat l name msg
-        | PlayerReady id -> return! loop <| setReady l id
+        | PlayerReady (id, up) -> return! loop <| setReady l id up
         | InitiateWiring host -> return! loop <| initiateWiring l man host
         | WiringReport (id, fs) ->
             match peerWiring l inbox man id fs with
