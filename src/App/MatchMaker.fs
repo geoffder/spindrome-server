@@ -100,6 +100,8 @@ let kickFromLobby id host = messageLobby (Kick (id, host.ID)) host.Agent
 
 let postChat post (p: PlayerInfo) = messageLobby (Chat (p.Name, post)) p.Agent
 
+let initPreGame p = messageLobby (InitiateWiring p) p.Agent
+
 let getCompare = function
     | EQ -> (=) | NE -> (<>) | LT -> (<) | GT -> (>) | LE -> (<=) | GE -> (>=)
 
@@ -180,9 +182,10 @@ let playerSocket name ws (ctx: HttpContext) =
                | JoinLobby name -> joinLobby name info
                | LeaveLobby -> leaveLobby info
                | ReadyUp up -> playerReadied info up
-               | PeersPonged fails -> wiringReport info fails
                | KickPlayer id -> kickFromLobby id info
                | ChatMessage msg -> postChat msg info
+               | HitPlay -> initPreGame info
+               | PeersPonged fails -> wiringReport info fails
                | NonConformant -> sendObj info.Agent BadRequest
             return! loop ()
         | (Close, _, _) -> return ()

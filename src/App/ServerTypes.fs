@@ -125,10 +125,11 @@ type RequestSchema =
     | HostLobby of NewLobby
     | JoinLobby of string
     | LeaveLobby
-    | ReadyUp of bool
-    | PeersPonged of System.Guid list
     | KickPlayer of System.Guid
     | ChatMessage of string
+    | ReadyUp of bool
+    | HitPlay
+    | PeersPonged of System.Guid list
     | NonConformant
 
 module AgentOperators =

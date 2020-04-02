@@ -41,16 +41,14 @@ let createLobby (ws: WebSocket) name mode time score cap =
     |> HostLobby
     |> sendObj ws
 
-let chat (ws: WebSocket) msg = ChatMessage msg |> sendObj ws
-
-let drop (ws: WebSocket) = LeaveLobby |> sendObj ws
-
-let join (ws: WebSocket) name = JoinLobby name |> sendObj ws
-
-let kick (ws: WebSocket) (id: string) =
-    KickPlayer (System.Guid.Parse id) |> sendObj ws
-
-let getLobbies (ws: WebSocket) filters = GetLobbies filters |> sendObj ws
+let chat ws msg = ChatMessage msg |> sendObj ws
+let drop ws = LeaveLobby |> sendObj ws
+let join ws name = JoinLobby name |> sendObj ws
+let kick ws (id: string) = KickPlayer (System.Guid.Parse id) |> sendObj ws
+let ready ws = ReadyUp true |> sendObj ws
+let unready ws = ReadyUp false |> sendObj ws
+let wiringReport ws fails = PeersPonged fails |> sendObj ws
+let getLobbies ws filters = GetLobbies filters |> sendObj ws
 
 let close (ws: WebSocket) = ws.Close ()
 
