@@ -119,7 +119,6 @@ type ResponseSchema =
     | LobbyList of LobbyInfo list
     | BadRequest
 
-// TODO: Add initiating wiring request.
 type RequestSchema =
     | GetLobbies of LobbyFilter list
     | HostLobby of NewLobby
@@ -131,6 +130,11 @@ type RequestSchema =
     | HitPlay
     | PeersPonged of System.Guid list
     | NonConformant
+
+module Helpers =
+    let strToBytes (str: string) = str |> System.Text.Encoding.ASCII.GetBytes
+    let bytesToStr (bs: byte array) = bs |> System.Text.Encoding.ASCII.GetString
+    let strToByteSeg = strToBytes >> ByteSegment
 
 module AgentOperators =
     let inline ( <-- ) (a: Agent<'T>) msg = a.Post msg
@@ -144,21 +148,19 @@ module AgentHelpers =
     let inline receive (inbox: Agent<'T>) = inbox.Receive ()
 
 module SocketAgentHelpers =
+    open Helpers
     open AgentOperators
-
-    let strToBytes (str: string) =
-        str |> System.Text.Encoding.ASCII.GetBytes |> ByteSegment
 
     let sendString (agent: Agent<SocketMessage>) =
         let msg data = Send (Text, data, true)
-        strToBytes >> msg >> agent.Post
+        strToByteSeg >> msg >> agent.Post
 
     let sendObj (agent: Agent<SocketMessage>) =
         JsonConvert.SerializeObject >> sendString agent
 
     let broadcast agents str =
         let send (a: Agent<SocketMessage>) =
-            a <-- Send (Text, strToBytes str, true)
+            a <-- Send (Text, strToByteSeg str, true)
         List.iter send agents
 
     let broadcastObj agents =

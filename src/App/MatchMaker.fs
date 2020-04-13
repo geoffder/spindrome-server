@@ -8,6 +8,7 @@ open Suave.Sockets.Control
 open Suave.WebSocket
 open System.Net
 
+open Helpers
 open AgentHelpers
 open AgentOperators
 open SocketAgentHelpers
@@ -43,7 +44,7 @@ let newLobby (l: NewLobby) host =
       Params = l.Params
       ChatNonce = 0
       Host = h
-      Players = [h]
+      Players = [ h ]
       WiringResults = Map.empty }
 
 // TODO: Actually look for forbidden words within the prospective name, rather
@@ -134,7 +135,7 @@ let getLobbies fs (wsAgent: Agent<SocketMessage>) =
 let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
     let wsSendObj =
         JsonConvert.SerializeObject
-        >> strToBytes
+        >> strToByteSeg
         >> (fun data -> ws.send Text data true)
     let rec loop state = async {
         match! receive inbox with
