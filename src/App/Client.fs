@@ -71,10 +71,10 @@ let kick ws (id: string) = KickPlayer (System.Guid.Parse id) |> sendObj ws
 let ready ws = ReadyUp true |> sendObj ws
 let unready ws = ReadyUp false |> sendObj ws
 let hitPlay ws = HitPlay |> sendObj ws
-let wiringReport ws fails = PeersPonged fails |> sendObj ws
 let getLobbies ws filters = GetLobbies filters |> sendObj ws
-
 let close (ws: WebSocket) = ws.Close ()
+
+let wiringReport ws fails = PeersPonged fails |> sendObj ws
 
 let sendingAgent (port: int) = Agent<IPEndPoint * UDPMessage>.Start(fun inbox ->
     let client = new UdpClient (port)
@@ -151,6 +151,9 @@ let receiving (port: int) sender wirer _pinger =
                sender <-- (result.RemoteEndPoint, Pong)
            | Pong ->
                printfn "Pong from %A!" result.RemoteEndPoint
+           | WirePing (id, strike) ->
+               sender <-- (result.RemoteEndPoint, WirePong (id, strike))
+           | WirePong (id, strike) -> wirer <-- Ponged (id, strike)
            | InvalidMessage -> printfn "Bad UDP message."
         return! loop ()
     }
@@ -158,3 +161,20 @@ let receiving (port: int) sender wirer _pinger =
 
 let ping (sender: Agent<IPEndPoint * UDPMessage>) port =
     sender <-- (IPEndPoint (IPAddress.Any, port), Ping)
+
+type Client (playerName, uri, port) =
+    let ws = login uri playerName
+    let sender = sendingAgent port
+    let wirer = wiringAgent ws port sender
+    let _receiver = receiving port sender wirer []
+    member __.CreateLobby name mode time score cap =
+        createLobby ws name mode time score cap
+    member __.Chat msg = chat ws msg
+    member __.Drop = drop ws
+    member __.Join lobbyName = join ws lobbyName
+    member __.Kick playerID = kick ws playerID
+    member __.Ready = ready ws
+    member __.UnReady = unready ws
+    member __.HitPlay = hitPlay ws
+    member __.GetLobbies filters = getLobbies ws filters
+    member __.Close = ws.Close ()
