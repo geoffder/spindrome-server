@@ -3,14 +3,25 @@ module Client
 open GameServer
 open GameServer.Helpers
 open GameServer.AgentOperators
+open GameServer.AgentHelpers
 
 open WebSocketSharp
 open Newtonsoft.Json
 open System.Net
 open System.Net.Sockets
-open System.Threading
 
-type UDPMessage = Ping | Pong | InvalidMessage
+type UDPMessage =
+    | Ping
+    | Pong
+    | WirePing of System.Guid * int
+    | WirePong of System.Guid * int
+    | InvalidMessage
+type WiringMessage =
+    | BeginWiring of PeerInfo list
+    | Ponged of System.Guid * int
+    | TimeOut of System.Guid * int
+type WiringStatus = Strike of int | Wired
+type WiringPeer = { EndPoint: IPEndPoint; Status: WiringStatus }
 
 let sendObj (ws: WebSocket) = JsonConvert.SerializeObject >> ws.Send
 
@@ -20,7 +31,7 @@ let getLocalIP () =
                        ProtocolType.Udp)
     s.Connect("8.8.8.8", 65530)
     let endpoint = s.LocalEndPoint :?> IPEndPoint
-    endpoint.Address.ToString()
+    endpoint.Address.ToString ()
 
 let openSocket uri = new WebSocket (uri)
 
@@ -65,40 +76,6 @@ let getLobbies ws filters = GetLobbies filters |> sendObj ws
 
 let close (ws: WebSocket) = ws.Close ()
 
-let socketAgent (_ws: WebSocket) = Agent.Start(fun inbox ->
-        let rec loop () = async {
-            match! inbox.Receive() with
-            | _ -> ()
-        }
-        loop ()
-    )
-
-// TODO: Create a ping pong agent (always running?) that is messaged
-// with (PingTime endpoint * t) and (PongTime endpoint * t). Storing a record
-// with the ping and pong times in Map (for each endpoint). Then calculating the
-// latency time (if pongtime is Some t, None means fail), and sending the
-// WiringResults back up the socket. This wiringAgent will be told to send
-// ping messages to the sending agent (wiping it's current state first),
-// marking the times that it does. Also it needs to create a delayed message to
-// itself as a "ping timeout".
-
-// NOTE: An important part of the ping process is making multiple attempts
-// before final timeout, incase a ping or pong packet is dropped...
-
-// TODO: I'll probably want a separate agent that will handle background
-// ping/pong-ing on a lobby by lobby level on being sent a lobby of peers to
-// test (for displaying latency in lobby menus, and for matchmaking)
-
-// NOTE: From looking, it seems that using separate ports is the safe way to go,
-// since reading from a port and trying to send with it could cause an exception
-// Therefore, I shouldn't be responding directly to the same endpoint? Maybe
-// send on port + 1.
-// Actually, just did some testing, and multiple clients using the same port to
-// send did not have any problems, unless sending many messages
-// near-simultaneously. Therefore a sending agent managing a single client does
-// not appear to be strictly necessary. One for receiving all messages meant for
-// a particular port is important though.
-
 let sendingAgent (port: int) = Agent<IPEndPoint * UDPMessage>.Start(fun inbox ->
     let client = new UdpClient (port)
     let rec loop () = async {
@@ -113,10 +90,52 @@ let sendingAgent (port: int) = Agent<IPEndPoint * UDPMessage>.Start(fun inbox ->
     loop ()
 )
 
-// TODO: The remaining issue I need to think about, is how the different agents
-// are managed. The recieving loop needs to know about the ping/pong agent, or
-// perhaps a manager that will pass things along to where they need to go...
+let maxFails = 3
 
+let wiringAgent (ws: WebSocket) port sender = Agent.Start(fun inbox ->
+    let createPeer (p: PeerInfo) =
+        (p.GUID, { EndPoint = IPEndPoint (IPAddress (strToBytes p.IPStr), port)
+                   Status = Strike 0 })
+    let strikeCheck = function | Strike s -> s | Wired -> maxFails
+
+    let mutable nFinished = 0
+    let rec loop (results: Map<System.Guid, WiringPeer>) = async {
+        let! msg = receive inbox
+        let updated =
+            match msg with
+            | BeginWiring peers ->
+                nFinished <- 0
+                let ps = peers |> List.map createPeer |> Map.ofList
+                ps |> Map.iter (fun id p ->
+                                sender <-- (p.EndPoint, WirePing (id, 1)))
+                ps
+            | TimeOut (id, _) when results.[id].Status = Wired -> results
+            | TimeOut (id, maxFails) ->
+                nFinished <- nFinished + 1
+                results
+                |> Map.add id { results.[id] with Status = Strike maxFails }
+            | TimeOut (id, n) when strikeCheck results.[id].Status < n ->
+                do sender <-- (results.[id].EndPoint, WirePing (id, n + 1))
+                results |> Map.add id { results.[id] with Status = Strike n }
+            | Ponged (id, n) when strikeCheck results.[id].Status < n ->
+                nFinished <- nFinished + 1
+                results |> Map.add id { results.[id] with Status = Wired }
+            | _ -> results  // n >= to the current (Strike num), Ponged/TimeOut
+
+        if nFinished = Map.count results then do
+            results
+            |> Map.toList
+            |> List.collect (fun (id, p) ->
+                             if p.Status <> Wired then [id] else [])
+            |> wiringReport ws
+        return! loop updated
+    }
+    loop Map.empty
+)
+
+// TODO: Need to work in handling of WirePing/WirePong. To do so, need to decide
+// how I want to wrap all of my let bindings, e.g. the live agents.
+// Sub-module or type?
 let receiving (port: int) (sender: Agent<IPEndPoint * UDPMessage>) =
     let client = new UdpClient (port)
     let rec loop () = async {
