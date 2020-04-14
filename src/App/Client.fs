@@ -98,45 +98,45 @@ let wiringAgent (ws: WebSocket) port sender = Agent.Start(fun inbox ->
                    Status = Strike 0 })
     let strikeCheck = function | Strike s -> s | Wired -> maxFails
 
-    let mutable nFinished = 0
-    let rec loop (results: Map<System.Guid, WiringPeer>) = async {
+    let rec loop nFinished (results: Map<System.Guid, WiringPeer>) = async {
         let! msg = receive inbox
-        let updated =
+        let fin, updated =
             match msg with
             | BeginWiring peers ->
-                nFinished <- 0
                 let ps = peers |> List.map createPeer |> Map.ofList
                 ps |> Map.iter (fun id p ->
                                 sender <-- (p.EndPoint, WirePing (id, 1)))
-                ps
-            | TimeOut (id, _) when results.[id].Status = Wired -> results
+                (0, ps)
+            | TimeOut (id, _) when results.[id].Status = Wired ->
+                (nFinished, results)
             | TimeOut (id, maxFails) ->
-                nFinished <- nFinished + 1
                 results
                 |> Map.add id { results.[id] with Status = Strike maxFails }
-            | TimeOut (id, n) when strikeCheck results.[id].Status < n ->
-                do sender <-- (results.[id].EndPoint, WirePing (id, n + 1))
-                results |> Map.add id { results.[id] with Status = Strike n }
-            | Ponged (id, n) when strikeCheck results.[id].Status < n ->
-                nFinished <- nFinished + 1
-                results |> Map.add id { results.[id] with Status = Wired }
-            | _ -> results  // n >= to the current (Strike num), Ponged/TimeOut
+                |> fun u -> (nFinished + 1, u)
+            | TimeOut (id, s) when strikeCheck results.[id].Status < s ->
+                do sender <-- (results.[id].EndPoint, WirePing (id, s + 1))
+                results
+                |> Map.add id { results.[id] with Status = Strike s }
+                |> fun u -> (nFinished, u)
+            | Ponged (id, s) when strikeCheck results.[id].Status < s ->
+                results
+                |> Map.add id { results.[id] with Status = Wired }
+                |> fun u -> (nFinished + 1, u)
+            | _ -> (nFinished, results)  // s <= to the current (Strike num)
 
-        if nFinished = Map.count results then do
-            results
+        if fin = Map.count results then do
+            updated
             |> Map.toList
             |> List.collect (fun (id, p) ->
                              if p.Status <> Wired then [id] else [])
             |> wiringReport ws
-        return! loop updated
+        return! loop fin updated
     }
-    loop Map.empty
+    loop 0 Map.empty
 )
 
-// TODO: Need to work in handling of WirePing/WirePong. To do so, need to decide
-// how I want to wrap all of my let bindings, e.g. the live agents.
-// Sub-module or type?
-let receiving (port: int) (sender: Agent<IPEndPoint * UDPMessage>) =
+// TODO: _pinger will be always running latency agent.
+let receiving (port: int) sender wirer _pinger =
     let client = new UdpClient (port)
     let rec loop () = async {
         let! result = client.ReceiveAsync () |> Async.AwaitTask
