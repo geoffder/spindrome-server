@@ -162,19 +162,18 @@ let receiving (port: int) sender wirer _pinger =
 let ping (sender: Agent<IPEndPoint * UDPMessage>) port =
     sender <-- (IPEndPoint (IPAddress.Any, port), Ping)
 
-type Client (playerName, uri, port) =
-    let ws = login uri playerName
-    let sender = sendingAgent port
-    let wirer = wiringAgent ws port sender
-    let _receiver = receiving port sender wirer []
-    member __.CreateLobby name mode time score cap =
-        createLobby ws name mode time score cap
-    member __.Chat msg = chat ws msg
-    member __.Drop = drop ws
-    member __.Join lobbyName = join ws lobbyName
-    member __.Kick playerID = kick ws playerID
-    member __.Ready = ready ws
-    member __.UnReady = unready ws
-    member __.HitPlay = hitPlay ws
-    member __.GetLobbies filters = getLobbies ws filters
-    member __.Close = ws.Close ()
+type Client (name, uri, port) =
+    let ws = login uri name
+    let udpSender = sendingAgent port
+    let wirer = wiringAgent ws port udpSender
+    let _udpReceiver = receiving port udpSender wirer []
+    member __.CreateLobby = createLobby ws
+    member __.Chat = chat ws
+    member __.Drop () = drop ws
+    member __.Join = join ws
+    member __.Kick = kick ws
+    member __.Ready () = ready ws
+    member __.UnReady () = unready ws
+    member __.HitPlay () = hitPlay ws
+    member __.GetLobbies = getLobbies ws
+    member __.Close () = ws.Close ()
