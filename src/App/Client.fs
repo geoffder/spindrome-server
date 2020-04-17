@@ -25,6 +25,12 @@ type WiringPeer = { EndPoint: IPEndPoint; Status: WiringStatus }
 
 let sendObj (ws: WebSocket) = JsonConvert.SerializeObject >> ws.Send
 
+let delayAction ms f =
+    async {
+        do! Async.Sleep ms
+        do f ()
+    } |> Async.Start
+
 let getLocalIP () =
     use s = new Socket(AddressFamily.InterNetwork,
                        SocketType.Dgram,
@@ -90,13 +96,14 @@ let sendingAgent (port: int) = Agent<IPEndPoint * UDPMessage>.Start(fun inbox ->
     loop ()
 )
 
-let maxFails = 3
-
-let wiringAgent (ws: WebSocket) port sender = Agent.Start(fun inbox ->
+let wiringAgent (ws: WebSocket) port sender maxFails = Agent.Start(fun inbox ->
     let createPeer (p: PeerInfo) =
         (p.GUID, { EndPoint = IPEndPoint (IPAddress (strToBytes p.IPStr), port)
                    Status = Strike 0 })
     let strikeCheck = function | Strike s -> s | Wired -> maxFails
+    let timeout id strike =
+        fun () -> inbox <-- TimeOut (id, strike)
+        |> delayAction 100
 
     let rec loop nFinished (results: Map<System.Guid, WiringPeer>) = async {
         let! msg = receive inbox
@@ -105,7 +112,8 @@ let wiringAgent (ws: WebSocket) port sender = Agent.Start(fun inbox ->
             | BeginWiring peers ->
                 let ps = peers |> List.map createPeer |> Map.ofList
                 ps |> Map.iter (fun id p ->
-                                sender <-- (p.EndPoint, WirePing (id, 1)))
+                                sender <-- (p.EndPoint, WirePing (id, 1))
+                                timeout id 1)
                 (0, ps)
             | TimeOut (id, _) when results.[id].Status = Wired ->
                 (nFinished, results)
@@ -115,6 +123,7 @@ let wiringAgent (ws: WebSocket) port sender = Agent.Start(fun inbox ->
                 |> fun u -> (nFinished + 1, u)
             | TimeOut (id, s) when strikeCheck results.[id].Status < s ->
                 do sender <-- (results.[id].EndPoint, WirePing (id, s + 1))
+                do timeout id (s + 1)
                 results
                 |> Map.add id { results.[id] with Status = Strike s }
                 |> fun u -> (nFinished, u)
@@ -165,7 +174,7 @@ let ping (sender: Agent<IPEndPoint * UDPMessage>) port =
 type Client (name, uri, port) =
     let ws = login uri name
     let udpSender = sendingAgent port
-    let wirer = wiringAgent ws port udpSender
+    let wirer = wiringAgent ws port udpSender 3
     let _udpReceiver = receiving port udpSender wirer []
     member __.CreateLobby = createLobby ws
     member __.Chat = chat ws
