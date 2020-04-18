@@ -41,25 +41,23 @@ let getLocalIP () =
 
 let openSocket uri = new WebSocket (uri)
 
-let responseHandler ws = function
-    | LobbyUpdate (PingPongTime peers) ->
-        peers |> printfn "Play pingpong with:\n%A"
+let responseHandler _ws wirer = function
+    | LobbyUpdate (PingPongTime peers) -> wirer <-- BeginWiring peers
     | response -> printfn "%A" response
 
-let socketReceive ws (m: MessageEventArgs) =
+let socketReceive ws wirer (m: MessageEventArgs) =
     try
         m.Data
         |> JsonConvert.DeserializeObject<ResponseSchema>
         |> Some
     with _ -> None
     |> function
-       | Some r -> responseHandler ws r
+       | Some r -> responseHandler ws wirer r
        | None -> do printfn "Failed to deserialize:\n%A" m.Data
 
-let login uri name =
-    let ws = sprintf "%s/%s" uri name |> openSocket
+let login uri name port =
+    let ws = sprintf "%s/%s/%i" uri name port |> openSocket
     ws.Connect ()
-    ws.OnMessage.Add (socketReceive ws)
     ws
 
 let createLobby (ws: WebSocket) name mode time score cap =
@@ -96,14 +94,14 @@ let sendingAgent (port: int) = Agent<IPEndPoint * UDPMessage>.Start(fun inbox ->
     loop ()
 )
 
-let wiringAgent (ws: WebSocket) port sender maxFails = Agent.Start(fun inbox ->
+let wiringAgent (ws: WebSocket) sender maxFails = Agent.Start(fun inbox ->
     let createPeer (p: PeerInfo) =
-        (p.GUID, { EndPoint = IPEndPoint (IPAddress (strToBytes p.IPStr), port)
+        (p.GUID, { EndPoint = IPEndPoint (IPAddress.Parse p.IP, p.Port)
                    Status = Strike 0 })
     let strikeCheck = function | Strike s -> s | Wired -> maxFails
     let timeout id strike =
         fun () -> inbox <-- TimeOut (id, strike)
-        |> delayAction 100
+        |> delayAction 150
 
     let rec loop nFinished (results: Map<System.Guid, WiringPeer>) = async {
         let! msg = receive inbox
@@ -117,7 +115,7 @@ let wiringAgent (ws: WebSocket) port sender maxFails = Agent.Start(fun inbox ->
                 (0, ps)
             | TimeOut (id, _) when results.[id].Status = Wired ->
                 (nFinished, results)
-            | TimeOut (id, maxFails) ->
+            | TimeOut (id, s) when s = maxFails ->
                 results
                 |> Map.add id { results.[id] with Status = Strike maxFails }
                 |> fun u -> (nFinished + 1, u)
@@ -133,20 +131,24 @@ let wiringAgent (ws: WebSocket) port sender maxFails = Agent.Start(fun inbox ->
                 |> fun u -> (nFinished + 1, u)
             | _ -> (nFinished, results)  // s <= to the current (Strike num)
 
-        if fin = Map.count results then do
+        if fin > 0 && fin = Map.count results then
             updated
             |> Map.toList
             |> List.collect (fun (id, p) ->
                              if p.Status <> Wired then [id] else [])
             |> wiringReport ws
-        return! loop fin updated
+            return! loop 0 updated
+        else return! loop fin updated
     }
     loop 0 Map.empty
 )
 
 // TODO: _pinger will be always running latency agent.
+// TODO: Needs to know what IP and port to listen to, the IP will be whatever
+// the websocket is using...
 let receiving (port: int) sender wirer _pinger =
-    let client = new UdpClient (port)
+    // let client = new UdpClient (port)
+    let client = new UdpClient (IPEndPoint (IPAddress.Parse "127.0.0.1", port))
     let rec loop () = async {
         let! result = client.ReceiveAsync () |> Async.AwaitTask
         try
@@ -162,7 +164,8 @@ let receiving (port: int) sender wirer _pinger =
                printfn "Pong from %A!" result.RemoteEndPoint
            | WirePing (id, strike) ->
                sender <-- (result.RemoteEndPoint, WirePong (id, strike))
-           | WirePong (id, strike) -> wirer <-- Ponged (id, strike)
+           | WirePong (id, strike) ->
+               wirer <-- Ponged (id, strike)
            | InvalidMessage -> printfn "Bad UDP message."
         return! loop ()
     }
@@ -172,10 +175,11 @@ let ping (sender: Agent<IPEndPoint * UDPMessage>) port =
     sender <-- (IPEndPoint (IPAddress.Any, port), Ping)
 
 type Client (name, uri, port) =
-    let ws = login uri name
+    let ws = login uri name port
     let udpSender = sendingAgent port
-    let wirer = wiringAgent ws port udpSender 3
+    let wirer = wiringAgent ws udpSender 3
     let _udpReceiver = receiving port udpSender wirer []
+    do ws.OnMessage.Add (socketReceive ws wirer)
     member __.CreateLobby = createLobby ws
     member __.Chat = chat ws
     member __.Drop () = drop ws

@@ -17,7 +17,17 @@ let getLobbyInfo (l: Lobby) =
       Population = l.Players.Length }
 
 let getPeerInfo (p: PlayerInfo) =
-    { Name = p.Name; GUID = p.ID; IPStr = p.IP.ToString () }
+    { Name = p.Name; GUID = p.ID; IP = p.IP; Port = p.Port }
+
+let broadcastPingPongTime players =
+    let info = List.map (fun p -> getPeerInfo p.Info) players
+    let sendUpdate peers player =
+        peers
+        |> List.filter (fun p -> p.GUID <> player.Info.ID)
+        |> PingPongTime
+        |> LobbyUpdate
+        |> sendObj player.Info.Agent
+    List.iter (sendUpdate info) players
 
 let refreshLobby l =
     { l with
@@ -134,13 +144,10 @@ let inline initiateWiring l man host =
         if l.Host.Info.ID = host.ID
            && List.length l.Players > 1
            && List.forall (fun p -> p.Ready) l.Players
-           // && Map.isEmpty l.WiringResults NOTE: Just wipe results instead?
+           && Map.isEmpty l.WiringResults // NOTE: Just wipe results instead?
         then
             man <-- DelistLobby l.Name
-            List.map (fun p -> getPeerInfo p.Info) l.Players
-            |> PingPongTime
-            |> LobbyUpdate
-            |> broadcastObj (getAgents l.Players)
+            broadcastPingPongTime l.Players
         else ()
     l
 

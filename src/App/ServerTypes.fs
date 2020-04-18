@@ -57,7 +57,8 @@ and LobbyAction =
 and PlayerInfo =
     { Name: string
       ID: System.Guid
-      IP: IPEndPoint
+      IP: string
+      Port: int
       Agent: Agent<SocketMessage> }
 
 and SocketMessage =
@@ -85,7 +86,7 @@ type ManagerMessage =
     | LookupLobby of Name * AsyncReplyChannel<LobbyRef option>
     | RequestList of AsyncReplyChannel<Map<Name, LobbyRef>>
 
-type PeerInfo = { Name: string; GUID: System.Guid; IPStr: string }
+type PeerInfo = { Name: string; GUID: System.Guid; IP: string; Port: int }
 
 type JoinResult =
     | LobbyJoined

@@ -162,11 +162,12 @@ let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
     loop { Location = None }
 )
 
-let playerSocket name ws (ctx: HttpContext) =
+let playerSocket name udpPort ws (ctx: HttpContext) =
     let info =
         { Name = name
           ID = System.Guid.NewGuid()
-          IP = IPEndPoint (ctx.clientIpTrustProxy, 3047)
+          IP = ctx.clientIpTrustProxy.ToString ()
+          Port = udpPort
           Agent = socketAgent ws }
 
     let rec loop () = socket {
@@ -202,8 +203,8 @@ let playerSocket name ws (ctx: HttpContext) =
             printfn "%s Disconnected!" name
     }
 
-let connectToPlayer name = fun ctx ->
-    handShake (playerSocket name) ctx
+let connectToPlayer (name, udpPort) = fun ctx ->
+    handShake (playerSocket name udpPort) ctx
 
 let server =
-    choose [ pathScan "/websocket/%s" connectToPlayer ]
+    choose [ pathScan "/websocket/%s/%i" connectToPlayer ]
