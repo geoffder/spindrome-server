@@ -9,6 +9,23 @@
 open GameServer
 open Client
 
-let ws = login "ws://localhost:8080/websocket" "Steve"
-do createLobby ws "foo" LastMan 10 10 4
-ws.Close()
+let sleep ms = async { do! Async.Sleep ms } |> Async.RunSynchronously
+// let ws = login "ws://localhost:8080/websocket" "Steve"
+// do createLobby ws "foo" LastMan 10 10 4
+// ws.Close()
+
+let chad = new Client ("Chad", "ws://localhost:8080/websocket", 4000)
+let gaston = new Client ("Gaston", "ws://localhost:8080/websocket", 3047)
+
+chad.CreateLobby "foo" LastMan 10 10 4
+sleep 500
+gaston.Join "foo"
+sleep 500
+chad.Ready ()
+gaston.Ready ()
+sleep 500
+chad.HitPlay ()
+sleep 1000
+
+chad.Close ()
+gaston.Close ()
