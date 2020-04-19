@@ -163,16 +163,10 @@ let socketAgent (ws: WebSocket) = Agent.Start(fun inbox ->
 )
 
 let playerSocket name udpPort ws (ctx: HttpContext) =
-    // let ipStr =
-    //     match ctx.clientIpTrustProxy.ToString () with
-    //     | "127.0.0.1" ->
-    //         Dns.GetHostEntry(Dns.GetHostName ()).AddressList.[0].ToString ()
-    //     | ip -> ip
     let info =
         { Name = name
           ID = System.Guid.NewGuid()
           IP = ctx.clientIpTrustProxy.ToString ()
-          // IP = ipStr
           Port = udpPort
           Agent = socketAgent ws }
 

@@ -25,19 +25,14 @@ type WiringPeer = { EndPoint: IPEndPoint; Status: WiringStatus }
 
 let sendObj (ws: WebSocket) = JsonConvert.SerializeObject >> ws.Send
 
+let ping (sender: Agent<IPEndPoint * UDPMessage>) port =
+    sender <-- (IPEndPoint (IPAddress.Any, port), Ping)
+
 let delayAction ms f =
     async {
         do! Async.Sleep ms
         do f ()
     } |> Async.Start
-
-let getLocalIP () =
-    use s = new Socket(AddressFamily.InterNetwork,
-                       SocketType.Dgram,
-                       ProtocolType.Udp)
-    s.Connect("8.8.8.8", 65530)
-    let endpoint = s.LocalEndPoint :?> IPEndPoint
-    endpoint.Address.ToString ()
 
 let openSocket uri = new WebSocket (uri)
 
@@ -81,7 +76,7 @@ let close (ws: WebSocket) = ws.Close ()
 let wiringReport ws fails = PeersPonged fails |> sendObj ws
 
 let sendingAgent (port: int) = Agent<IPEndPoint * UDPMessage>.Start(fun inbox ->
-    let client = new UdpClient (port)
+    let client = new UdpClient (IPEndPoint(IPAddress.Broadcast, port))
     let rec loop () = async {
         let! endpoint, msg = inbox.Receive ()
         do printfn "sending %A to %A" msg endpoint
@@ -145,14 +140,8 @@ let wiringAgent (ws: WebSocket) sender maxFails = Agent.Start(fun inbox ->
 )
 
 // TODO: _pinger will be always running latency agent.
-// TODO: Needs to know what IP and port to listen to, the IP will be whatever
-// the websocket is using... I thought IPAddress.Any (default) would catch
-// things sent to 127.0.0.1 (localhost) but it doesn't seem to.
 let receiving (port: int) sender wirer _pinger =
-    // let client = new UdpClient (port)
-    let client = new UdpClient (IPEndPoint (IPAddress.Parse "127.0.0.1", port))
-    // let client = new UdpClient (IPEndPoint (IPAddress.Any, port))
-    // let client = new UdpClient ();
+    let client = new UdpClient (port)
     let rec loop () = async {
         let! result = client.ReceiveAsync () |> Async.AwaitTask
         try
@@ -177,9 +166,10 @@ let receiving (port: int) sender wirer _pinger =
     }
     loop () |> Async.Start
 
-let ping (sender: Agent<IPEndPoint * UDPMessage>) port =
-    sender <-- (IPEndPoint (IPAddress.Any, port), Ping)
-
+// TODO: Consider opening the UdpClient with unspecified port here,
+// then reading what was assigned from client.Client.LocalEndPoint, and use
+// that port (send to server, use for send/receive). That way the OS is in
+// charge of assigning it.
 type Client (name, uri, port) =
     let ws = login uri name port
     let udpSender = sendingAgent port
@@ -195,5 +185,5 @@ type Client (name, uri, port) =
     member __.UnReady () = unready ws
     member __.HitPlay () = hitPlay ws
     member __.GetLobbies = getLobbies ws
-    member __.Close () = ws.Close ()
+    member __.Close () = try ws.Close () finally printfn "%s logged out!" name
     member __.PlainPing remotePort = ping udpSender remotePort
