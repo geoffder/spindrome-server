@@ -34,6 +34,12 @@ let delayAction ms f =
         do f ()
     } |> Async.Start
 
+let getPort () =
+    let c = new UdpClient (0)
+    let port = (c.Client.LocalEndPoint :?> IPEndPoint).Port
+    c.Dispose ()
+    port
+
 let openSocket uri = new WebSocket (uri)
 
 let responseHandler _ws wirer = function
@@ -166,11 +172,8 @@ let receiving (port: int) sender wirer _pinger =
     }
     loop () |> Async.Start
 
-// TODO: Consider opening the UdpClient with unspecified port here,
-// then reading what was assigned from client.Client.LocalEndPoint, and use
-// that port (send to server, use for send/receive). That way the OS is in
-// charge of assigning it.
-type Client (name, uri, port) =
+type Client (name, uri) =
+    let port = getPort ()
     let ws = login uri name port
     let udpSender = sendingAgent port
     let wirer = wiringAgent ws udpSender 3

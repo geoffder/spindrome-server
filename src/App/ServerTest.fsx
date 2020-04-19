@@ -11,10 +11,10 @@ open Client
 
 let sleep ms = async { do! Async.Sleep ms } |> Async.RunSynchronously
 
-let gaston = new Client ("Gaston", "ws://localhost:8080/websocket", 3544)
-let chad = new Client ("Chad", "ws://localhost:8080/websocket", 3074)
-// let chad = new Client ("Chad", "ws://192.168.0.23:8080/websocket", 3074)
-// let gaston = new Client ("Gaston", "ws://192.168.0.23:8080/websocket", 3544)
+let gaston = new Client ("Gaston", "ws://localhost:8080/websocket")
+let chad = new Client ("Chad", "ws://localhost:8080/websocket")
+// let chad = new Client ("Chad", "ws://192.168.0.23:8080/websocket")
+// let gaston = new Client ("Gaston", "ws://192.168.0.23:8080/websocket")
 
 chad.CreateLobby "foo" LastMan 10 10 4
 sleep 500
