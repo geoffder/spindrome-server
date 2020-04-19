@@ -108,6 +108,7 @@ type LobbyUpdate =
     | ChangedParams of LobbyParams
     | Readied of System.Guid * bool
     | PingPongTime of PeerInfo list
+    | P2PWiringFailed
     | GameTime of LobbyParams
     | KickedByHost
     | LobbyClosed

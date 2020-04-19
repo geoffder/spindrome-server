@@ -14,8 +14,8 @@ let sleep ms = async { do! Async.Sleep ms } |> Async.RunSynchronously
 // do createLobby ws "foo" LastMan 10 10 4
 // ws.Close()
 
-let chad = new Client ("Chad", "ws://localhost:8080/websocket", 4000)
-let gaston = new Client ("Gaston", "ws://localhost:8080/websocket", 3047)
+let chad = new Client ("Chad", "ws://localhost:8080/websocket", 3074)
+let gaston = new Client ("Gaston", "ws://localhost:8080/websocket", 3544)
 
 chad.CreateLobby "foo" LastMan 10 10 4
 sleep 500
@@ -29,3 +29,10 @@ sleep 1000
 
 chad.Close ()
 gaston.Close ()
+
+chad.PlainPing 3544
+gaston.PlainPing 3074
+sleep 1000
+chad.PlainPing 3544
+gaston.PlainPing 3074
+sleep 1000

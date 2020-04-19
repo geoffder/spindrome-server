@@ -84,6 +84,7 @@ let sendingAgent (port: int) = Agent<IPEndPoint * UDPMessage>.Start(fun inbox ->
     let client = new UdpClient (port)
     let rec loop () = async {
         let! endpoint, msg = inbox.Receive ()
+        do printfn "sending %A to %A" msg endpoint
         msg
         |> JsonConvert.SerializeObject
         |> strToBytes
@@ -101,7 +102,7 @@ let wiringAgent (ws: WebSocket) sender maxFails = Agent.Start(fun inbox ->
     let strikeCheck = function | Strike s -> s | Wired -> maxFails
     let timeout id strike =
         fun () -> inbox <-- TimeOut (id, strike)
-        |> delayAction 150
+        |> delayAction 300
 
     let rec loop nFinished (results: Map<System.Guid, WiringPeer>) = async {
         let! msg = receive inbox
@@ -145,10 +146,13 @@ let wiringAgent (ws: WebSocket) sender maxFails = Agent.Start(fun inbox ->
 
 // TODO: _pinger will be always running latency agent.
 // TODO: Needs to know what IP and port to listen to, the IP will be whatever
-// the websocket is using...
+// the websocket is using... I thought IPAddress.Any (default) would catch
+// things sent to 127.0.0.1 (localhost) but it doesn't seem to.
 let receiving (port: int) sender wirer _pinger =
     // let client = new UdpClient (port)
     let client = new UdpClient (IPEndPoint (IPAddress.Parse "127.0.0.1", port))
+    // let client = new UdpClient (IPEndPoint (IPAddress.Any, port))
+    // let client = new UdpClient ();
     let rec loop () = async {
         let! result = client.ReceiveAsync () |> Async.AwaitTask
         try
@@ -163,8 +167,10 @@ let receiving (port: int) sender wirer _pinger =
            | Pong ->
                printfn "Pong from %A!" result.RemoteEndPoint
            | WirePing (id, strike) ->
+               do printfn "WirePing from %A!" result.RemoteEndPoint
                sender <-- (result.RemoteEndPoint, WirePong (id, strike))
            | WirePong (id, strike) ->
+               do printfn "WirePong from %A!" result.RemoteEndPoint
                wirer <-- Ponged (id, strike)
            | InvalidMessage -> printfn "Bad UDP message."
         return! loop ()
@@ -190,3 +196,4 @@ type Client (name, uri, port) =
     member __.HitPlay () = hitPlay ws
     member __.GetLobbies = getLobbies ws
     member __.Close () = ws.Close ()
+    member __.PlainPing remotePort = ping udpSender remotePort

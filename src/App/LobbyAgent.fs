@@ -151,8 +151,6 @@ let inline initiateWiring l man host =
         else ()
     l
 
-// TODO: Currently no custom messaging about failure condition.
-// Should send messages to clients. Maybe add reason sum type to kick functions?
 let inline peerWiring l box man id fails =
     match Map.add id fails l.WiringResults with
     | fs when fs.Count < l.Players.Length -> Some { l with WiringResults = fs }
@@ -164,6 +162,10 @@ let inline peerWiring l box man id fails =
                 |> broadcastObj (getAgents l.Players)
             Some l
         else
+            do
+                P2PWiringFailed
+                |> LobbyUpdate
+                |> broadcastObj (getAgents l.Players)
             match prunePeers l with
             | None -> None
             | someUpdated ->
