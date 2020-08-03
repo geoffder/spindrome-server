@@ -7,5 +7,5 @@ let config =
 
 [<EntryPoint>]
 let main _argv =
-    startWebServer config server
-    0
+  startWebServer config server
+  0
